@@ -53,7 +53,6 @@ constexpr std::string_view kJoinFailedEvent = "jointeam_failed";
 constexpr std::string_view kRoundPrestartEvent = "round_prestart";
 constexpr std::string_view kPlayerDeathEvent = "player_death";
 constexpr std::string_view kPlayerSpawnEvent = "player_spawn";
-constexpr std::string_view kMapWithAutomaticCapacity = "de_poseidon";
 constexpr std::string_view kGameRulesClass = "CCSGameRules";
 constexpr std::string_view kSpawnEnabledField = "m_bEnabled";
 constexpr std::string_view kSpawnEntitySchemaClass = "SpawnPoint";
@@ -443,7 +442,7 @@ bool EnsureTeamMaximumCapacity( void* rules, std::string_view map, Team team, st
 
 bool RefreshObservedTeamMaximums( void* rules, std::string_view map, std::int32_t target,
 	std::string& error ) noexcept {
-	if ( !g_capacityReadbackAvailable || !EqualsAsciiCaseInsensitive( map, kMapWithAutomaticCapacity ) ) {
+	if ( !g_capacityReadbackAvailable ) {
 		return true;
 	}
 	try {
@@ -1660,9 +1659,6 @@ bool AddCapacityPoint( Team team, std::string& error ) noexcept {
 }
 
 bool ReconcileAutomaticCapacity( std::string& error ) noexcept {
-	if ( !EqualsAsciiCaseInsensitive( g_currentMap, kMapWithAutomaticCapacity ) ) {
-		return true;
-	}
 	g_capacityReadbackAvailable = false;
 	try {
 		const auto maxPlayers = s2sdk::GetMaxClients();
@@ -1685,6 +1681,7 @@ bool ReconcileAutomaticCapacity( std::string& error ) noexcept {
 			return false;
 		}
 		constexpr std::array<Team, 2> teams{ Team::Terrorist, Team::CounterTerrorist };
+		std::string missingSources;
 		for ( const auto team : teams ) {
 			const auto index = TeamIndex( team );
 			bool externalOwner = false;
@@ -1740,10 +1737,11 @@ bool ReconcileAutomaticCapacity( std::string& error ) noexcept {
 				return false;
 			}
 			if ( CountOwned( team, true ) < targetAutomatic && sources.empty() ) {
-				if ( error.empty() ) {
-					error = "no valid native or saved manual spawn source exists for a team needing capacity";
-				}
-				return false;
+				if ( !error.empty() ) return false;
+				if ( !missingSources.empty() ) missingSources += "; ";
+				missingSources += std::string( team == Team::Terrorist ? "T" : "CT" ) +
+					" has no valid native or saved manual spawn source; add a point with sf_spawn_add";
+				continue;
 			}
 			while ( CountOwned( team, true ) < targetAutomatic ) {
 				SpawnPoint point = sources[static_cast<std::size_t>( CountOwned( team, true ) ) % sources.size()];
@@ -1762,6 +1760,10 @@ bool ReconcileAutomaticCapacity( std::string& error ) noexcept {
 		}
 		g_capacityMaxClients = maxPlayers;
 		g_effectiveTeamCapacities = capacities;
+		if ( !missingSources.empty() ) {
+			error = std::move( missingSources );
+			return false;
+		}
 		g_capacityReadbackAvailable = true;
 		g_capacityReconcilePending = false;
 		return true;
@@ -1782,25 +1784,19 @@ void SetReadyMapReason() noexcept {
 		const auto tSources = tNativeSources + static_cast<std::size_t>( CountPoints( g_manualPoints, Team::Terrorist ) );
 		const auto ctSources = ctNativeSources +
 			static_cast<std::size_t>( CountPoints( g_manualPoints, Team::CounterTerrorist ) );
-		if ( EqualsAsciiCaseInsensitive( g_currentMap, kMapWithAutomaticCapacity ) ) {
-			if ( !g_capacityReadbackAvailable ) {
-				g_mapReason = "native team spawn capacity has not been read back";
-				g_mapPrepared = false;
-				return;
-			}
-			g_mapReason = ( tSources == 0 || ctSources == 0 ) ?
-				"ready; add a manual point for the team without a native spawn source" :
-				( tNativeSources == 0 || ctNativeSources == 0 ?
-					"ready; native/manual effective team capacity" : "ready; de_poseidon native effective team capacity" );
-			g_mapReason += " T=" +
-				std::to_string( g_effectiveTeamCapacities[0].effective ) + " CT=" +
-				std::to_string( g_effectiveTeamCapacities[1].effective ) + " / maxplayers=" +
-				std::to_string( g_capacityMaxClients );
-		} else if ( !g_manualPoints.empty() ) {
-			g_mapReason = "ready; loaded map-specific manual spawn points";
-		} else {
-			g_mapReason = "ready; server-console manual point tools available";
+		if ( !g_capacityReadbackAvailable ) {
+			g_mapReason = "native team spawn capacity has not been read back";
+			g_mapPrepared = false;
+			return;
 		}
+		g_mapReason = ( tSources == 0 || ctSources == 0 ) ?
+			"ready; add a manual point for the team without a native spawn source" :
+			( tNativeSources == 0 || ctNativeSources == 0 ?
+				"ready; native/manual effective team capacity" : "ready; native effective team capacity" );
+		g_mapReason += " T=" +
+			std::to_string( g_effectiveTeamCapacities[0].effective ) + " CT=" +
+			std::to_string( g_effectiveTeamCapacities[1].effective ) + " / maxplayers=" +
+			std::to_string( g_capacityMaxClients );
 		if ( g_teamMaximumYielded[0] ) {
 			g_mapReason += "; T max-team capacity has an external owner";
 		}
@@ -1832,7 +1828,7 @@ void SpawnMapEntities() noexcept {
 	}
 	if ( !ReconcileAutomaticCapacity( error ) ) {
 		g_mapReason = std::move( error );
-		(void)RemoveAllOwned();
+		// Keep working manual points and capacity already established for the other team.
 		return;
 	}
 	g_mapPrepared = true;
@@ -2784,8 +2780,8 @@ Status Update( bool enabled ) noexcept {
 			g_mapPrepared = false;
 			g_mapReason = "map ended; waiting for map start before rebuilding map spawns";
 		}
-		if ( g_mapPrepared && EqualsAsciiCaseInsensitive( g_currentMap, kMapWithAutomaticCapacity ) &&
-			!g_capacityReconcilePending ) {
+		if ( ( g_mapPrepared || g_capacityMaxClients > 0 ) && g_mapDataLoaded &&
+			!g_rebuildPending && !g_mapLifecycle.mapEndPending && !g_capacityReconcilePending ) {
 			const auto currentMaxClients = s2sdk::GetMaxClients();
 			if ( currentMaxClients > 0 && currentMaxClients != g_capacityMaxClients ) {
 				std::string error;
@@ -2814,7 +2810,6 @@ Status Update( bool enabled ) noexcept {
 			}
 		}
 		if ( g_capacityReadbackAvailable && g_mapDataLoaded &&
-			EqualsAsciiCaseInsensitive( g_currentMap, kMapWithAutomaticCapacity ) &&
 			!g_mapLifecycle.mapEndPending ) {
 			const bool wasTeamCapacityBlocked = g_teamMaximumCapacityBlocked;
 			const auto maxPlayers = s2sdk::GetMaxClients();

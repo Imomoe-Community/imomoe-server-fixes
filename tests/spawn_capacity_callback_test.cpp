@@ -1035,11 +1035,11 @@ void TestAdminCommandCleanupUsesCallbackAbsencePostcondition() {
 	g_fakeRemoveCommandReturnsFalseAfterRemoval = false;
 }
 
-void TestNativeRefreshReadbackFollowsActualTeamAllowance() {
+void TestNativeRefreshReadbackFollowsActualTeamAllowance( const char* map ) {
 	using namespace imomoe::server_fixes::spawn_capacity;
 	const auto previousMaxPlayers = g_actualMaxPlayers;
 	g_actualMaxPlayers = 32;
-	ResetSpawnModule( "de_poseidon" );
+	ResetSpawnModule( map );
 	g_rulesMaxTerrorists = 5;
 	g_rulesMaxCounterTerrorists = 5;
 	for ( std::int32_t index = 0; index < 5; ++index ) {
@@ -1058,6 +1058,16 @@ void TestNativeRefreshReadbackFollowsActualTeamAllowance() {
 		"CT capacity must read back 32 valid native points and a 32-player max-team value" );
 	Require( CountOwned( Team::Terrorist, true ) == 27 && CountOwned( Team::CounterTerrorist, true ) == 27,
 		"each team receives only the 27 duplicate points missing from its five native points" );
+	for ( const auto target : { 40, 16 } ) {
+		g_actualMaxPlayers = target;
+		const auto status = Update( true );
+		Require( status.available && g_capacityMaxClients == target &&
+			g_effectiveTeamCapacities[0].effective == target && g_effectiveTeamCapacities[1].effective == target,
+			"normal updates grow and shrink capacity with maxplayers on any map" );
+		Require( CountOwned( Team::Terrorist, true ) == target - 5 &&
+			CountOwned( Team::CounterTerrorist, true ) == target - 5,
+			"maxplayers changes retain only the automatic points required" );
+	}
 	Require( Shutdown(), "shutdown must remove capacity points and restore owned team maximums" );
 	Require( g_rulesMaxTerrorists == 5 && g_rulesMaxCounterTerrorists == 5,
 		"shutdown restores both team maximums to their captured 5-player baselines" );
@@ -1092,7 +1102,7 @@ void TestUpdateReportsExternalTeamCapacityAndKeepsEffectiveReadbackCurrent() {
 	using namespace imomoe::server_fixes::spawn_capacity;
 	const auto previousMaxPlayers = g_actualMaxPlayers;
 	g_actualMaxPlayers = 32;
-	ResetSpawnModule( "de_poseidon" );
+	ResetSpawnModule( "cs_office" );
 	g_rulesMaxTerrorists = 5;
 	g_rulesMaxCounterTerrorists = 5;
 	AddNativeSource( Team::Terrorist );
@@ -1142,7 +1152,7 @@ void TestManualSpawnRecoversMapWithoutValidNativeSourceAndSkipsInvalidFirst() {
 	const auto previousMaxPlayers = g_actualMaxPlayers;
 	const auto previousGameDirectory = g_gameDirectory;
 	g_actualMaxPlayers = 2;
-	ResetSpawnModule( "de_poseidon" );
+	ResetSpawnModule( "workshop_arena" );
 	g_rulesMaxTerrorists = 2;
 	g_rulesMaxCounterTerrorists = 2;
 	const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -1402,7 +1412,7 @@ void TestNativeCapacityReadbackRejectsUnregisteredSpawnEntity() {
 
 void TestOccupiedRegisteredSpawnsKeepCapacityAcrossRoundAndRebuild() {
 	using namespace imomoe::server_fixes::spawn_capacity;
-	ResetSpawnModule( "de_poseidon" );
+	ResetSpawnModule( "de_mirage" );
 	g_actualMaxPlayers = 4;
 	g_rulesMaxTerrorists = 4;
 	g_rulesMaxCounterTerrorists = 4;
@@ -1496,6 +1506,8 @@ void TestProductionManualSaveLoadRoundTrip() {
 void TestActualSameNameMapCallbacksRebuildWithoutDuplicates() {
 	using namespace imomoe::server_fixes::spawn_capacity;
 	using imomoe::server_fixes::hostage::SchemaQueriesReady;
+	const auto previousMaxPlayers = g_actualMaxPlayers;
+	g_actualMaxPlayers = 6;
 	ResetSpawnModule( "de_mirage" );
 	Require( imomoe::server_fixes::hostage::Shutdown(), "hostage lifecycle state should begin clean" );
 	Require( !SchemaQueriesReady(), "schema access starts closed before the SDK map-start callback" );
@@ -1526,11 +1538,14 @@ void TestActualSameNameMapCallbacksRebuildWithoutDuplicates() {
 	// real startup has not called spawn::Update while the central gate is closed.
 	g_mapLoadAttempted = false;
 	const auto initialStatus = Update( true );
-	Require( initialStatus.available && g_mapPrepared && g_ownedSpawns.size() == 1,
-		"the first spawn-module update after map start must load the initial manual point without a native source" );
+	Require( !initialStatus.available && !g_mapPrepared && g_ownedSpawns.size() == static_cast<std::size_t>( g_actualMaxPlayers ) &&
+		initialStatus.reason.find( "T has no valid" ) != std::string::npos,
+		"the first spawn-module update after map start must keep and expand the saved CT point while reporting the missing T source" );
 	Require( g_spawnMapStartCallback != nullptr,
 		"the enabled spawn module must register its production map-start callback for later map generations" );
 	const auto oldHandle = g_ownedSpawns.front().handle;
+	Require( !g_ownedSpawns.front().automatic && g_ownedSpawns.front().manualId == 17,
+		"the saved manual point remains active when the other team lacks a template" );
 
 	DispatchMapEnd();
 	Require( !SchemaQueriesReady(), "the registered production map-end callback must close schema readiness" );
@@ -1541,15 +1556,24 @@ void TestActualSameNameMapCallbacksRebuildWithoutDuplicates() {
 	Require( SchemaQueriesReady(), "the next SDK map-start dispatch must reopen schema readiness" );
 	(void)imomoe::server_fixes::hostage::Update( false, 0 );
 	const auto mapStartStatus = Update( true );
-	Require( g_currentMap == "de_mirage" && g_mapPrepared && g_manualPoints.size() == 1 && g_ownedSpawns.size() == 1,
+	Require( g_currentMap == "de_mirage" && !g_mapPrepared && g_manualPoints.size() == 1 &&
+		g_ownedSpawns.size() == static_cast<std::size_t>( g_actualMaxPlayers ),
 		"the actual map-start callback must restore manual capacity before the first team round" );
-	Require( mapStartStatus.available,
+	Require( !mapStartStatus.available && mapStartStatus.reason.find( "T has no valid" ) != std::string::npos,
 		"the production update after map start must expose manual recovery without waiting for round_prestart" );
 	Require( g_ownedSpawns.front().manualId == 17 && g_ownedSpawns.front().handle != oldHandle,
 		"the reloaded generation restores one saved manual point, not the old entity" );
+	for ( const auto target : { 3, 8 } ) {
+		g_actualMaxPlayers = target;
+		const auto status = Update( true );
+		Require( !status.available && status.reason.find( "T has no valid" ) != std::string::npos &&
+			g_rulesCounterTerroristSpawnCount == target && CountOwned( Team::CounterTerrorist, true ) == target - 1,
+			"the usable CT capacity tracks maxplayers even while T lacks a template" );
+	}
 	const auto rebuiltHandle = g_ownedSpawns.front().handle;
 	(void)OnRoundPrestartEvent( plg::string( "round_prestart" ), nullptr, false );
-	Require( g_ownedSpawns.size() == 1 && g_ownedSpawns.front().handle == rebuiltHandle,
+	Require( g_ownedSpawns.size() == static_cast<std::size_t>( g_actualMaxPlayers ) &&
+		g_ownedSpawns.front().handle == rebuiltHandle,
 		"the first team round must not duplicate the already restored manual point" );
 
 	(void)Shutdown();
@@ -1565,6 +1589,7 @@ void TestActualSameNameMapCallbacksRebuildWithoutDuplicates() {
 		"map callback cleanup must remain inside its uniquely named temporary directory" );
 	std::filesystem::remove_all( g_gameDirectory );
 	g_gameDirectory = previousGameDirectory;
+	g_actualMaxPlayers = previousMaxPlayers;
 }
 
 void TestDisabledModuleSameNameReloadInvalidatesTemplateQualification() {
@@ -1776,7 +1801,9 @@ int main() {
 	TestPendingRetryPreservesForeignRawClientCommandVeto();
 	TestJointeamUsesGlobalPreAndFailureEventAsRetryBoundary();
 	TestAdminCommandCleanupUsesCallbackAbsencePostcondition();
-	TestNativeRefreshReadbackFollowsActualTeamAllowance();
+	for ( const auto* map : { "de_poseidon", "de_mirage", "cs_office", "workshop_arena" } ) {
+		TestNativeRefreshReadbackFollowsActualTeamAllowance( map );
+	}
 	TestTeamMaximumExternalOverrideIsYieldedAndPreserved();
 	TestUpdateReportsExternalTeamCapacityAndKeepsEffectiveReadbackCurrent();
 	TestManualSpawnRecoversMapWithoutValidNativeSourceAndSkipsInvalidFirst();

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/untrustedmodders/plugify-plugin-s2sdk/refs/tags/v3.0.6/assets/gamedata.schema.json",
+  "csgo": {
+    "Signatures": {
+      // Build 26334290. SpawnPoint::Spawn calls this with itself to register.
+      // Passing nullptr only recounts existing full handles/enabled state;
+      // unlike the LevelInit scanner it does not reject occupied locations.
+      "ServerFixes::RegisterOrRecountSpawnPoints": {
+        "library": "server",
+        "win64": "48 89 5C 24 08 48 89 74 24 18 57 48 83 EC 20 48 8B DA 48 8B F1 48 85 D2 0F 84 D0 01 00 00 48 8B 4B 10",
+        "linuxsteamrt64": "55 48 89 E5 41 55 41 54 53 48 89 FB 48 83 EC 18 48 85 F6 74 56 48 8B 7E 10 49 89 F4 48 8D 35 47 3A 57 FF"
+      },
+      // Build 26334290. The native list scan calls this GameRules/entity predicate
+      // before registering an info_player_* handle; the third argument is null.
+      "ServerFixes::SpawnPointEligible": {
+        "library": "server",
+        "win64": "48 89 5C 24 18 55 56 57 48 8D 6C 24 B9 48 81 EC F0 00 00 00 49 8B F8 48 8B F2 48 8B D9 48 85 D2 0F 84 04 02 00 00 80 B9 98 0F 00 00 00",
+        "linuxsteamrt64": "55 B9 0F 08 00 00 66 0F EF C0 48 89 E5 41 56 49 89 FE 48 89 D7 41 55 49 89 F5 41 54 53 48 89 D3 48 81 EC 90 00 00 00 48 8B 05 ?? ?? ?? ??"
+      },
+      // Current Build 26334290. This is the CHostage_API target input
+      // handler, not the pawn wrapper: only this entry proves that native
+      // hostage processing was actually dispatched for the carried handle.
+      "ServerFixes::HostageOnRescueZoneTouch": {
+        "library": "server",
+        "win64": "48 89 5C 24 08 57 48 83 EC 40 48 8B 44 24 70 49 8B D9 48 8B 40 08 8B 00 83 F8 FF 0F 84 B5 00 00 00 4C 8B 15 B0 EA BE 01 33 FF 4D 85 D2 0F 84 B3 00 00 00 83 F8 FE 0F 84 AA 00 00 00 8B C8 81 E1 FF 7F 00 00 44 8B C1 48 C1 E9 09 4D 8B 0C CA",
+        "linuxsteamrt64": "49 8B 40 08 49 89 C9 8B 08 83 F9 FF 0F 84 80 00 00 00 48 8B 15 E7 D8 AF 01 48 85 D2 74 74 83 F9 FE 74 6F 48 89 C8 89 CF 48 C1 E8 09 66 81 E7 FF 7F 83 E0 3F 48 8B 34 C2 48 85 F6 74 55 89 C8 25 FF 01 00 00 48 6B C0 70 48 01 F0 3B 48 10 75 50 48 8B 00 48 8B 15 86 BA B6 01 48 8B 40 10 48 8B"
+      },
+      "ServerFixes::PawnOnRescueZoneTouch": {
+        "library": "server",
+        "win64": "48 89 5C 24 08 57 48 83 EC 40 48 8B 44 24 70 49 8B D9 48 8B 40 08 8B 00 83 F8 FF 0F 84 B5 00 00 00 4C 8B 15 E0 10 D7 01 33 FF 4D 85 D2 0F 84 B3 00 00 00 83 F8 FE 0F 84 AA 00 00 00 8B C8 81 E1 FF 7F 00 00 44",
+        "linuxsteamrt64": "49 8B 40 08 49 89 C9 8B 08 83 F9 FF 0F 84 80 00 00 00 48 8B 15 07 A3 CB 01 48 85 D2 74 74 83 F9 FE 74 6F 48 89 C8 89 CF 48 C1 E8 09 66 81 E7 FF 7F 83 E0 3F 48 8B 34 C2 48 85 F6 74 55 89 C8 25"
+      }
+    },
+    "Offsets": {
+      // Read-only primary CUtlVector layouts verified in the paired helpers.
+      "ServerFixes::TSpawnList": { "win64": 3968, "linuxsteamrt64": 3968 },
+      "ServerFixes::CTSpawnList": { "win64": 3944, "linuxsteamrt64": 3944 },
+      "CBaseEntity::Touch": {
+        "win64": 151,
+        "linuxsteamrt64": 150
+      }
+    }
+  }
+}

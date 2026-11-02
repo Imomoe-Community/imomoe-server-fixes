@@ -1,0 +1,46 @@
+name: Bug Report / 问题反馈
+description: Report a bug, crash, or compatibility issue / 报告插件异常、崩溃或版本兼容问题
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈问题！请尽可能提供以下信息以便定位。
+        Thanks for reporting an issue! Please fill out the details below to help us reproduce it.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Server Platform / 服务端平台
+      options:
+        - Windows (win64)
+        - Linux (linuxsteamrt64 / Steam Runtime Sniper)
+    validations:
+      required: true
+
+  - type: input
+    id: cs2_build
+    attributes:
+      label: CS2 Build Version / CS2 服务端版本
+      description: e.g. Build 26334290 (output of `version` in server console / 服务端控制台输入 `version` 的输出)
+      placeholder: "Build 26334290"
+    validations:
+      required: true
+
+  - type: textarea
+    id: sf_status
+    attributes:
+      label: "`sf_status` Output / `sf_status` 输出"
+      description: Paste the output of `sf_status` from the server console / 请粘贴服务端控制台运行 `sf_status` 的输出
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened? / 问题描述与复现步骤
+      description: Describe the issue, map name, and steps to reproduce / 请描述发生的问题、所在地图以及复现步骤
+    validations:
+      required: true

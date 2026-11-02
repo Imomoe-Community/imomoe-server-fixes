@@ -1,0 +1,40 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "policy",
+      "displayName": "SDK-independent policy checks",
+      "binaryDir": "${sourceDir}/build/${hostSystemName}/policy",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SERVER_FIXES_POLICY_TESTS_ONLY": true,
+        "SERVER_FIXES_CALLBACK_TESTS": false
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "policy",
+      "configurePreset": "policy",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "policy",
+      "configurePreset": "policy",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

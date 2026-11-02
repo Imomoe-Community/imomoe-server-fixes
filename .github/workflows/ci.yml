@@ -1,0 +1,36 @@
+name: Policy and migration checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Policy checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure SDK-independent tests
+        run: cmake --preset policy
+      - name: Build policy tests
+        run: cmake --build --preset policy --parallel 2
+      - name: Run policy tests
+        run: ctest --preset policy
+      - name: Run configuration migration tests
+        run: python -m unittest discover -s tests -p "test_*.py"

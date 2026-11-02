@@ -1,0 +1,23 @@
+# Local build outputs and SDK worktrees.
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+/.work/
+/dist/
+/CMakeUserPresets.json
+/compile_commands.json
+
+# Python bytecode and local IDE state.
+__pycache__/
+*.py[cod]
+/.vs/
+/.vscode/
+/.idea/
+*.user
+*.suo
+*.opendb
+
+# OS metadata.
+.DS_Store
+Thumbs.db

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://raw.githubusercontent.com/untrustedmodders/plugify/refs/tags/v3.1.0/schemas/plugin.schema.json",
+  "version": "0.1.0",
+  "name": "imomoe_server_fixes",
+  "description": "Independent Imomoe server fixes for chat admission, hostage compatibility, spawn capacity, and spectator capacity",
+  "author": "Mai Ooizumi",
+  "website": "https://github.com/Imomoe-Community/imomoe-server-fixes.git",
+  "license": "AGPL-3.0-or-later",
+  "entry": "bin/imomoe-server-fixes",
+  "platforms": [],
+  "language": "cpp",
+  "dependencies": [
+    {
+      "name": "s2sdk",
+      "constraints": ">=3.0.6"
+    },
+    {
+      "name": "polyhook",
+      "constraints": ">=2.5.7"
+    }
+  ],
+  "methods": [
+    {
+      "name": "GetOwnedFixes",
+      "funcName": "GetOwnedFixes",
+      "group": "Capabilities",
+      "description": "Read-only ownership mask for FunRounds compatibility: bit 0 chat_admission; bit 1 hostage_compat. Spawn capacity and spectator compatibility are independent capabilities. The mask is independent of enablement and runtime availability.",
+      "paramTypes": [],
+      "retType": {
+        "type": "uint32"
+      }
+    }
+  ]
+}

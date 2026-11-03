@@ -105,7 +105,7 @@ python -m unittest discover -s tests -p "test_*.py"
 
 编译完整插件需要支持 C++23 的编译器，并使用 [依赖说明 (docs/DEPENDENCIES.md)](docs/DEPENDENCIES.md) 中固定的依赖版本与配对构建目录：
 
-- **绑定与清单契约**：请使用配对 S2SDK 的 Plugify 头文件以及本仓库检入的 `generated-s2sdk/` 导出头。`bindings/s2sdk.pplugin` 是在 159 方法 / 6 原型清单的基础上，额外声明了 S2SDK 3.0.6 已实现的 `OnMapStart_Register` 与 `OnMapStart_Unregister`（共 161 方法 / 6 原型）。请勿使用 S2SDK 仓库根目录的 `plugify-plugin-s2sdk.pplugin.in` 模板重新生成。
+- **绑定与清单契约**：请使用配对 S2SDK 的 Plugify 头文件以及本仓库检入的 `generated-s2sdk/` 导出头。`bindings/s2sdk.pplugin` 是在 159 方法 / 6 原型清单的基础上，额外声明了 S2SDK 3.1.1 已实现的 `OnMapStart_Register` 与 `OnMapStart_Unregister`（共 161 方法 / 6 原型）。请勿使用 S2SDK 仓库根目录的 `plugify-plugin-s2sdk.pplugin.in` 模板重新生成。
 - **配对 SourceSDK 与 `tier0` 链接**：加队重试逻辑使用了 S2SDK 固定子模块（`f3de33c58595c628c12b4ffaba76dfcd49b8763f`）中的强类型 `IServerGameClients::ClientCommand` 与 `CCommand`。构建时需提供同一 S2SDK 工作树下的 `public` 头文件目录与已构建的 `build` 目录（包含 `<build>/external/sourcesdk/protos` 生成的 Protobuf 头文件以及提供 `CCommand` 实现的静态库 `tier0_perproject`）。
   - **Windows** 链接 `build/external/sourcesdk/Release/tier0_perproject.lib` 与 `source/external/sourcesdk/lib/win64/tier0.lib`（运行时由 CS2 从 `game/bin/win64/tier0.dll` 提供）。
   - **Steam Runtime Linux** 使用 Sniper GCC 14 工具链，链接 `build/external/sourcesdk/libtier0_perproject.a` 与 `source/external/sourcesdk/lib/linuxsteamrt64/libtier0.so`（运行时由 CS2 从 `game/bin/linuxsteamrt64/libtier0.so` 提供）。
@@ -146,9 +146,9 @@ cmake --build build --config Release
 
 ### 版本兼容与技术细节
 
-- **目标 CS2 服务端版本**：当前二进制特征码与偏移绑定至 **CS2 Build 26334290**：
-  - Windows `server.dll`：Timestamp `0x6AE4FB81` / Image Size `0x257F000`
-  - Linux `libserver.so`：GNU Build ID `73fb98e2ead4f84b8fd1dd6bf3126b9a1fe3b4f5`
+- **目标 CS2 服务端版本**：当前二进制特征码、偏移和人质阵营补丁绑定至 **Build 26393695 / ServerVersion 2000940 / PatchVersion 1.41.9.5**：
+  - Windows `server.dll`：Timestamp `0x6AE91E94` / Image Size `0x257F000`
+  - Linux `libserver.so`：GNU Build ID `b9eac3d151886d4fc820d2e1d1f1d8642daa54c9`
   - 当服务端二进制与上述标识不匹配时，依赖特征码或内存补丁的路径会自动安全禁用（Fail-closed），并通过 `sf_status` 报告原因。
 - **CT 救援检测机制**：通过观察 `CBaseEntity::Touch`、派发器直接调用 pawn 救援函数前一条传参 `MOV` 指令上的寄存器快照 Mid-Hook（Windows 为 `mov rcx,rdi`，Linux 为 `mov rdi,rbx`，之所以锚定在 `MOV` 是因为 PolyHook 对 `CALL` 指令下钩子时会跟随进入被调函数），以及 `CHostage_API::OnRescueZoneTouch` 入口来判断救援是否被引擎正常处理。挂载前会校验指令字节、相邻直接调用、返回路径及被调函数序言；若存在外部 Detour 或无法明确分类的调用，则放弃当次补偿以避免误触发。
 - **出生点生命周期与重算**：自动补充的出生点要求模板源同时通过原生几何空间校验并位于引擎主出生点列表中；运行期增删出生点会调用原生 `RegisterOrRecountSpawnPoints(nullptr)` 路径重算有效容量（仅校验完整句柄与启用状态，不会因为当前位置站有存活玩家而误判失效）。在换图、禁用或卸载时，插件会先禁用自建出生点并触发重算，再交由 S2SDK 请求引擎安全移除。
@@ -262,7 +262,7 @@ The `policy` preset separates Windows and Linux build directories automatically.
 
 Building the full plugin requires a C++23 compiler and the pinned inputs documented in [Dependency inputs](docs/DEPENDENCIES.md):
 
-- **Provider & Bindings Contract**: Build with matching Plugify headers and this repository's checked-in `generated-s2sdk/` headers. `bindings/s2sdk.pplugin` is the 161-method / 6-prototype provider manifest (the 159-method base manifest plus `OnMapStart_Register` and `OnMapStart_Unregister`, which S2SDK 3.0.6 exports with the same no-argument callback ABI as `OnMapEndCallback`). Do not regenerate bindings from the SDK root's `plugify-plugin-s2sdk.pplugin.in` template.
+- **Provider & Bindings Contract**: Build with matching Plugify headers and this repository's checked-in `generated-s2sdk/` headers. `bindings/s2sdk.pplugin` is the 161-method / 6-prototype provider manifest (the 159-method base manifest plus `OnMapStart_Register` and `OnMapStart_Unregister`, which S2SDK 3.1.1 exports with the same no-argument callback ABI as `OnMapEndCallback`). Do not regenerate bindings from the SDK root's `plugify-plugin-s2sdk.pplugin.in` template.
 - **Paired SourceSDK & `tier0` Linking**: Join-team retry uses typed `IServerGameClients::ClientCommand` and `CCommand` from the SourceSDK submodule pinned by S2SDK (`f3de33c58595c628c12b4ffaba76dfcd49b8763f`). Supply the `public` headers and the configured `build` directory from that same S2SDK worktree (including `<build>/external/sourcesdk/protos` and the static `tier0_perproject` archive).
   - **Windows** links `build/external/sourcesdk/Release/tier0_perproject.lib` and `source/external/sourcesdk/lib/win64/tier0.lib` (resolved at runtime from `game/bin/win64/tier0.dll`).
   - **Steam Runtime Linux** builds with the Sniper GCC 14 toolchain and links `build/external/sourcesdk/libtier0_perproject.a` and `source/external/sourcesdk/lib/linuxsteamrt64/libtier0.so` (resolved at runtime from `game/bin/linuxsteamrt64/libtier0.so`).
@@ -303,9 +303,9 @@ cmake --build build --config Release
 
 ### Compatibility and Technical Notes
 
-- **Pinned CS2 Server Build**: Binary-derived hostage paths and gamedata signatures target **CS2 Build 26334290**:
-  - Windows `server.dll`: Timestamp `0x6AE4FB81` / Image Size `0x257F000`
-  - Linux `libserver.so`: GNU Build ID `73fb98e2ead4f84b8fd1dd6bf3126b9a1fe3b4f5`
+- **Pinned CS2 Server Build**: Binary-derived hostage paths and gamedata signatures target **Build 26393695 / ServerVersion 2000940 / PatchVersion 1.41.9.5**:
+  - Windows `server.dll`: Timestamp `0x6AE91E94` / Image Size `0x257F000`
+  - Linux `libserver.so`: GNU Build ID `b9eac3d151886d4fc820d2e1d1f1d8642daa54c9`
   - Unrecognized server builds fail closed and report the unsupported path in `sf_status`.
 - **CT Rescue Mid-Hook Anchor**: Because PolyHook follows a hook placed directly on a `CALL` instruction into the callee, the pawn-rescue dispatch marker is anchored on the immediately preceding argument `MOV` (`mov rcx,rdi` on Windows; `mov rdi,rbx` on Linux). The plugin verifies the instruction bytes, adjacent direct call, return path, and exact callee prologue before attaching, and suppresses compensation if the callee is detoured or if an unclassifiable Hostage API call occurs during the touch.
 - **Spawn Registration & Retirement**: Template spawn sources must pass both native geometry qualification and membership in the engine's primary spawn list. Runtime updates invoke the native null-point recount path (`RegisterOrRecountSpawnPoints(nullptr)`), which checks full handles and enabled state without rejecting positions occupied by live players. On map change, disable, or unload, only plugin-owned spawn entities are disabled, recounted, and queued for engine deletion.

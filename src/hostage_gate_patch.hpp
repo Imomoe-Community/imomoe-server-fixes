@@ -180,7 +180,7 @@ private:
 
 #ifdef _WIN32
     using Thread = DWORD;
-    static constexpr std::uintptr_t kGateRva = 0xACD935;
+    static constexpr std::uintptr_t kGateRva = 0xACD925;
     static constexpr std::array<std::uint8_t, 9> kOriginal{0x80, 0xBD, 0x44, 0x03, 0x00, 0x00, 0x03, 0x75, 0x30};
     static constexpr std::array<std::uint8_t, 9> kPatched{0xF6, 0x85, 0x44, 0x03, 0x00, 0x00, 0x02, 0x74, 0x30};
     static Thread current_thread() noexcept { return GetCurrentThreadId(); }
@@ -195,10 +195,10 @@ private:
         }
         const auto* const nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
         if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
-            || nt->FileHeader.TimeDateStamp != 0x6AE4FB81 || nt->OptionalHeader.SizeOfImage != 0x257F000) {
-            return {true, false, reinterpret_cast<std::uintptr_t>(base), {}, "server.dll is not the analyzed build 26334290 image"};
+            || nt->FileHeader.TimeDateStamp != 0x6AE91E94 || nt->OptionalHeader.SizeOfImage != 0x257F000) {
+            return {true, false, reinterpret_cast<std::uintptr_t>(base), {}, "server.dll is not the analyzed build 26393695 image"};
         }
-        return {true, true, reinterpret_cast<std::uintptr_t>(base), "timestamp=0x6ae4fb81,size=0x257f000", {}};
+        return {true, true, reinterpret_cast<std::uintptr_t>(base), "timestamp=0x6ae91e94,size=0x257f000", {}};
     }
 
     template <std::size_t N>
@@ -220,12 +220,12 @@ private:
     }
 #else
     using Thread = long;
-    static constexpr std::uintptr_t kGateRva = 0x15A4F4B;
+    static constexpr std::uintptr_t kGateRva = 0x15A4F8B;
     static constexpr std::array<std::uint8_t, 14> kOriginal{
         0x41, 0x80, 0xBD, 0x24, 0x06, 0x00, 0x00, 0x03, 0x0F, 0x84, 0x07, 0x01, 0x00, 0x00};
     static constexpr std::array<std::uint8_t, 14> kPatched{
         0x41, 0xF6, 0x85, 0x24, 0x06, 0x00, 0x00, 0x02, 0x0F, 0x85, 0x07, 0x01, 0x00, 0x00};
-    static constexpr std::string_view kExpectedBuildId = "73fb98e2ead4f84b8fd1dd6bf3126b9a1fe3b4f5";
+    static constexpr std::string_view kExpectedBuildId = "b9eac3d151886d4fc820d2e1d1f1d8642daa54c9";
     static Thread current_thread() noexcept { return static_cast<Thread>(::syscall(SYS_gettid)); }
     static std::string_view platform_name() noexcept { return "linux"; }
 
@@ -323,7 +323,7 @@ private:
             return search.module;
         }
         if (search.module.identity != kExpectedBuildId) {
-            search.module.reason = "libserver.so build ID is not the analyzed build 26334290 image";
+            search.module.reason = "libserver.so build ID is not the analyzed build 26393695 image";
             return search.module;
         }
         search.module.ok = true;

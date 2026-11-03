@@ -357,7 +357,7 @@ bool ResolvePawnRescueMarker() noexcept {
 		return false;
 	}
 	auto* const code = static_cast<std::byte*>( g_pawnRescueDispatcher );
-	// Current CS2 Build 26334290 IDA databases: the dispatcher's final argument move is
+	// Current CS2 Build 26393695 IDA databases: the dispatcher's final argument move is
 	// immediately followed by its direct pawn-body call. PolyHook follows an E8 call when
 	// hooking the call instruction itself, so place the register-snapshot mid-hook on this
 	// preceding MOV and verify the whole MOV/call/return/callee route before attaching it.

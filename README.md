@@ -146,14 +146,14 @@ cmake --build build --config Release
 
 ### 版本兼容与技术细节
 
-- **目标 CS2 服务端版本**：当前二进制特征码、偏移和人质阵营补丁绑定至 **Build 26393695 / ServerVersion 2000940 / PatchVersion 1.41.9.5**：
-  - Windows `server.dll`：Timestamp `0x6AE91E94` / Image Size `0x257F000`
-  - Linux `libserver.so`：GNU Build ID `b9eac3d151886d4fc820d2e1d1f1d8642daa54c9`
+- **目标 CS2 服务端版本**：当前二进制特征码、偏移和人质阵营补丁绑定至 **Build 26445667 / ServerVersion 2000942 / PatchVersion 1.41.9.6**：
+  - Windows `server.dll`：Timestamp `0x6AEBC501` / Image Size `0x257C000`
+  - Linux `libserver.so`：GNU Build ID `5ea0e482b46eb71c4f9615c48b34ddc36f55ca40`
   - 当服务端二进制与上述标识不匹配时，依赖特征码或内存补丁的路径会自动安全禁用（Fail-closed），并通过 `sf_status` 报告原因。
 - **CT 救援检测机制**：通过观察 `CBaseEntity::Touch`、派发器直接调用 pawn 救援函数前一条传参 `MOV` 指令上的寄存器快照 Mid-Hook（Windows 为 `mov rcx,rdi`，Linux 为 `mov rdi,rbx`，之所以锚定在 `MOV` 是因为 PolyHook 对 `CALL` 指令下钩子时会跟随进入被调函数），以及 `CHostage_API::OnRescueZoneTouch` 入口来判断救援是否被引擎正常处理。挂载前会校验指令字节、相邻直接调用、返回路径及被调函数序言；若存在外部 Detour 或无法明确分类的调用，则放弃当次补偿以避免误触发。
 - **出生点生命周期与重算**：自动补充的出生点要求模板源同时通过原生几何空间校验并位于引擎主出生点列表中；运行期增删出生点会调用原生 `RegisterOrRecountSpawnPoints(nullptr)` 路径重算有效容量（仅校验完整句柄与启用状态，不会因为当前位置站有存活玩家而误判失效）。在换图、禁用或卸载时，插件会先禁用自建出生点并触发重算，再交由 S2SDK 请求引擎安全移除。
 - **观察者上限换图恢复**：在地图结束（`OnMapEnd`）且原生 ConVar 仍处于安全可写阶段时，若 `mp_spectators_max` 仍由本插件持有，插件会先将其恢复为接管前的原始值，从而确保下一张地图的 `CCSGameRules` 实例从原始基准值初始化，而无需访问正在销毁的旧 GameRules 对象。
-- **已有版本验证记录（全地图扩容修改前）**：Windows 与 Steam Runtime Linux 均已通过完整构建、策略/回调测试、最小插件验证及真机人质救援/C4 控制验收；Windows 已完成双客户端聊天拦截、满员 64 人（1 真人 + 63 BOT）容量及观察者死亡/掉落/视角切换/返回全流程验收。Linux 运行环境需配合 [PolyHook 页边界修复](docs/DEPENDENCIES.md#linux-polyhook-range-repair) 使用。
+- **已有版本验证记录（全地图扩容修改前）**：Windows 与 Steam Runtime Linux 均已通过完整构建、策略/回调测试、最小插件验证及真机人质救援/C4 控制验收；Windows 已完成双客户端聊天拦截、满员 64 人（1 真人 + 63 BOT）容量及观察者死亡/掉落/视角切换/返回全流程验收。本轮双端 runtime 使用 PolyHook `2.5.8`；仍使用 Linux `2.5.7` 的旧包须包含 [PolyHook 页边界修复](docs/DEPENDENCIES.md#linux-polyhook-257-fallback)。
 
 ### 开源协议
 
@@ -303,14 +303,14 @@ cmake --build build --config Release
 
 ### Compatibility and Technical Notes
 
-- **Pinned CS2 Server Build**: Binary-derived hostage paths and gamedata signatures target **Build 26393695 / ServerVersion 2000940 / PatchVersion 1.41.9.5**:
-  - Windows `server.dll`: Timestamp `0x6AE91E94` / Image Size `0x257F000`
-  - Linux `libserver.so`: GNU Build ID `b9eac3d151886d4fc820d2e1d1f1d8642daa54c9`
+- **Pinned CS2 Server Build**: Binary-derived hostage paths and gamedata signatures target **Build 26445667 / ServerVersion 2000942 / PatchVersion 1.41.9.6**:
+  - Windows `server.dll`: Timestamp `0x6AEBC501` / Image Size `0x257C000`
+  - Linux `libserver.so`: GNU Build ID `5ea0e482b46eb71c4f9615c48b34ddc36f55ca40`
   - Unrecognized server builds fail closed and report the unsupported path in `sf_status`.
 - **CT Rescue Mid-Hook Anchor**: Because PolyHook follows a hook placed directly on a `CALL` instruction into the callee, the pawn-rescue dispatch marker is anchored on the immediately preceding argument `MOV` (`mov rcx,rdi` on Windows; `mov rdi,rbx` on Linux). The plugin verifies the instruction bytes, adjacent direct call, return path, and exact callee prologue before attaching, and suppresses compensation if the callee is detoured or if an unclassifiable Hostage API call occurs during the touch.
 - **Spawn Registration & Retirement**: Template spawn sources must pass both native geometry qualification and membership in the engine's primary spawn list. Runtime updates invoke the native null-point recount path (`RegisterOrRecountSpawnPoints(nullptr)`), which checks full handles and enabled state without rejecting positions occupied by live players. On map change, disable, or unload, only plugin-owned spawn entities are disabled, recounted, and queued for engine deletion.
 - **Map-End Spectator Restoration**: At `OnMapEnd`, while the raw `mp_spectators_max` ConVar is still safe to write, the module restores it if still owned by this plugin so the next map's `CCSGameRules` instance initializes from the prior baseline without querying the tearing-down GameRules object.
-- **Earlier Validation (Before the All-Map Expansion Change)**: Windows and Steam Runtime Linux builds have passed policy/callback tests, minimal-plugin checks, and in-game hostage rescue / C4 verification. Two-client pre-ingame chat blocking, full 64-slot capacity (1 human + 63 bots), and spectator lifecycle checks were verified on Windows. Linux runtime deployments require the paired PolyHook repair described in [Dependency inputs](docs/DEPENDENCIES.md#linux-polyhook-range-repair).
+- **Earlier Validation (Before the All-Map Expansion Change)**: Windows and Steam Runtime Linux builds have passed policy/callback tests, minimal-plugin checks, and in-game hostage rescue / C4 verification. Two-client pre-ingame chat blocking, full 64-slot capacity (1 human + 63 bots), and spectator lifecycle checks were verified on Windows. This update's paired runtime used PolyHook `2.5.8`; legacy Linux `2.5.7` packages require the page-range fix documented in [Dependency Inputs](docs/DEPENDENCIES.md#linux-polyhook-257-fallback).
 
 ### License
 

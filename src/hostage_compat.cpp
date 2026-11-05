@@ -357,7 +357,7 @@ bool ResolvePawnRescueMarker() noexcept {
 		return false;
 	}
 	auto* const code = static_cast<std::byte*>( g_pawnRescueDispatcher );
-	// Current CS2 Build 26393695 IDA databases: the dispatcher's final argument move is
+	// Current CS2 Build 26445667 IDA databases: the dispatcher's final argument move is
 	// immediately followed by its direct pawn-body call. PolyHook follows an E8 call when
 	// hooking the call instruction itself, so place the register-snapshot mid-hook on this
 	// preceding MOV and verify the whole MOV/call/return/callee route before attaching it.
@@ -365,14 +365,14 @@ bool ResolvePawnRescueMarker() noexcept {
 	constexpr std::ptrdiff_t kCallOffset = 0x165;
 	constexpr std::ptrdiff_t kMarkerOffset = 0x162;
 	constexpr std::array<std::uint8_t, 3> kExpectedMarker{ 0x48, 0x8B, 0xCF }; // mov rcx, rdi
-	constexpr std::array<std::uint8_t, 5> kExpectedCall{ 0xE8, 0x56, 0xDD, 0x04, 0x00 };
+	constexpr std::array<std::uint8_t, 5> kExpectedCall{ 0xE8, 0x06, 0xF6, 0x05, 0x00 };
 	constexpr std::array<std::uint8_t, 5> kExpectedReturn{ 0x48, 0x8B, 0x5C, 0x24, 0x50 };
 	constexpr std::array<std::uint8_t, 8> kExpectedBody{ 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B };
 #elif defined(__linux__)
 	constexpr std::ptrdiff_t kCallOffset = 0xFF;
 	constexpr std::ptrdiff_t kMarkerOffset = 0xFC;
 	constexpr std::array<std::uint8_t, 3> kExpectedMarker{ 0x48, 0x89, 0xDF }; // mov rdi, rbx
-	constexpr std::array<std::uint8_t, 5> kExpectedCall{ 0xE8, 0x2C, 0xFB, 0xFF, 0xFF };
+	constexpr std::array<std::uint8_t, 5> kExpectedCall{ 0xE8, 0x1C, 0xFB, 0xFF, 0xFF };
 	constexpr std::array<std::uint8_t, 4> kExpectedReturn{ 0x48, 0x83, 0xC4, 0x20 };
 	constexpr std::array<std::uint8_t, 8> kExpectedBody{ 0x55, 0x48, 0x89, 0xE5, 0x41, 0x57, 0x41, 0x56 };
 #else

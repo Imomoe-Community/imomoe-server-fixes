@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/Mai-Ooizumi/plugify-plugin-s2sdk/c21cd032e0dd459a5f057b25d21473c29f6acff2/schemas/gamedata.schema.json",
   "csgo": {
     "Signatures": {
-      // Build 26393695. SpawnPoint::Spawn calls this with itself to register.
+      // Build 26445667. SpawnPoint::Spawn calls this with itself to register.
       // Passing nullptr only recounts existing full handles/enabled state;
       // unlike the LevelInit scanner it does not reject occupied locations.
       "ServerFixes::RegisterOrRecountSpawnPoints": {
@@ -10,25 +10,25 @@
         "win64": "48 89 5C 24 ? 48 89 74 24 ? 57 48 83 EC 20 48 8B DA 48 8B F1 48 85 D2 0F 84 ? ? ? ? 48 8B 4B",
         "linuxsteamrt64": "55 48 89 E5 41 55 41 54 53 48 89 FB 48 83 EC 18 48 85 F6"
       },
-      // Build 26393695. The native list scan calls this GameRules/entity predicate
+      // Build 26445667. The native list scan calls this GameRules/entity predicate
       // before registering an info_player_* handle; the third argument is null.
       "ServerFixes::SpawnPointEligible": {
         "library": "server",
         "win64": "48 89 5C 24 ? 55 56 57 48 8D 6C 24 ? 48 81 EC F0 00 00 00",
         "linuxsteamrt64": "55 B9 0F 08 00 00"
       },
-      // Current Build 26393695. This is the CHostage_API target input
+      // Current Build 26445667. This is the CHostage_API target input
       // handler, not the pawn wrapper: only this entry proves that native
       // hostage processing was actually dispatched for the carried handle.
       "ServerFixes::HostageOnRescueZoneTouch": {
         "library": "server",
-        "win64": "48 89 5C 24 08 57 48 83 EC 40 48 8B 44 24 70 49 8B D9 48 8B 40 08 8B 00 83 F8 FF 0F 84 B5 00 00 00 4C 8B 15 30 EB BE 01",
-        "linuxsteamrt64": "49 8B 40 08 49 89 C9 8B 08 83 F9 FF 0F 84 80 00 00 00 48 8B 15 27 D9 AF 01"
+        "win64": "48 89 5C 24 08 57 48 83 EC 40 48 8B 44 24 70 49 8B D9 48 8B 40 08 8B 00 83 F8 FF 0F 84 B5 00 00 00 4C 8B 15 A0 0E BF 01 33",
+        "linuxsteamrt64": "49 8B 40 08 49 89 C9 8B 08 83 F9 FF 0F 84 80 00 00 00 48 8B 15 E7 EF AF 01 48 85 D2 74 74 83 F9 FE 74 6F 48 89 C8 89 CF 48"
       },
       "ServerFixes::PawnOnRescueZoneTouch": {
         "library": "server",
-        "win64": "48 89 5C 24 08 57 48 83 EC 40 48 8B 44 24 70 49 8B D9 48 8B 40 08 8B 00 83 F8 FF 0F 84 B5 00 00 00 4C 8B 15 60 11 D7 01",
-        "linuxsteamrt64": "49 8B 40 08 49 89 C9 8B 08 83 F9 FF 0F 84 80 00 00 00 48 8B 15 47 A3 CB 01"
+        "win64": "48 89 5C 24 08 57 48 83 EC 40 48 8B 44 24 70 49 8B D9 48 8B 40 08 8B 00 83 F8 FF 0F 84 B5 00 00 00 4C 8B 15 A0 B7 D6 01 33",
+        "linuxsteamrt64": "49 8B 40 08 49 89 C9 8B 08 83 F9 FF 0F 84 80 00 00 00 48 8B 15 67 39 CA 01 48 85 D2 74 74 83 F9 FE 74 6F 48 89 C8 89 CF 48"
       }
     },
     "Offsets": {

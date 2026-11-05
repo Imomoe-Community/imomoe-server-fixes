@@ -12,7 +12,7 @@ When building the full `imomoe_server_fixes` plugin, use the pinned versions bel
 | **SourceSDK** | S2SDK 子模块指针 [`f3de33c`](https://github.com/Wend4r/sourcesdk/tree/f3de33c58595c628c12b4ffaba76dfcd49b8763f) |
 | **Plugify Host** | `3.1.0` |
 | **Plugify C++ Language Module** | `2.4.5` |
-| **PolyHook** | `2.5.7`（Linux 运行环境需包含下方的内存页跨界修复 / Linux requires the page-range fix below） |
+| **PolyHook** | `2.5.8`（本轮 Windows/Linux runtime 均已验证；Linux `2.5.7` 旧包仍需下方的内存页修复 / runtime-tested on Windows and Linux; legacy Linux `2.5.7` packages still need the page-range fix below） |
 | **plugify-gen** | `1.2.15`（仅在需要从 `bindings/s2sdk.pplugin` 重新生成绑定时使用 / for intentional binding regeneration） |
 
 请检出上述固定提交的 S2SDK 并递归初始化其子模块（`git submodule update --init --recursive`）。编译本插件所需的 SourceSDK 公共头文件、生成的 Protobuf 头文件（`external/sourcesdk/protos`）、静态库 `tier0_perproject` 以及运行时 `tier0` 导入库均来自该 S2SDK 工作树及其已完成构建的 `build` 目录。具体 CMake 参数请参考 [README 构建指南](../README.md#build-the-plugin-with-the-paired-sdk)。
@@ -21,24 +21,24 @@ Check out S2SDK at the fixed commit above with recursive submodules initialized.
 
 ---
 
-## Linux PolyHook range repair
+## Linux PolyHook 2.5.7 fallback
 
 ### 简体中文
 
-Linux 环境下使用的 PolyHook `2.5.7` 必须包含针对 `mem_protect` 的跨页长度取整修复：在向上对齐受保护内存区域长度时，需要将起始地址自身的页内偏移（Page Offset）一并计入。
+本轮双端 runtime 使用 PolyHook `2.5.8`。若 Linux 环境仍使用旧版 `2.5.7`，必须包含针对 `mem_protect` 的跨页长度取整修复：在向上对齐受保护内存区域长度时，需要将起始地址自身的页内偏移（Page Offset）一并计入。
 
 - **插件源码基准提交**：`5892ea6a0ce7e8c48748e054e91bbf4df973cc9f`
 - **PolyHook_2 子模块提交**：`298d56210b9d9e66cde8f96481d6053925c6ae15`
 - **上游修复 PR**：[untrustedmodders/plugify-plugin-polyhook#37](https://github.com/untrustedmodders/plugify-plugin-polyhook/pull/37)（合并提交 `0aadc50fb66afd5c77af4f601e5e4b25e1be7b86`）
 
-未经此修复的原始 `2.5.7` Linux 二进制在处理跨越内存页边界的跳板（Trampoline）时，可能会遗漏最后一页的可执行权限设置并导致崩溃。由于版本号仍显示为 `2.5.7`，部署 Linux 服务端时请确认所使用的 PolyHook 二进制已包含该提交（Windows 环境使用原版 `2.5.7` 即可）。
+未经此修复的原始 `2.5.7` Linux 二进制在处理跨越内存页边界的跳板（Trampoline）时，可能会遗漏最后一页的可执行权限设置并导致崩溃。部署该旧版 Linux 包时，请确认所使用的 PolyHook 二进制已包含该提交。
 
 ### English
 
-On Linux, PolyHook `2.5.7` requires the `mem_protect` page-range calculation fix: include the starting address's page offset when rounding up the protected memory length.
+The paired Windows and Linux runtime checks for this update used PolyHook `2.5.8`. If Linux deployments still use the older `2.5.7` package, it requires the `mem_protect` page-range calculation fix: include the starting address's page offset when rounding up the protected memory length.
 
 - **Plugin source base**: `5892ea6a0ce7e8c48748e054e91bbf4df973cc9f`
 - **PolyHook_2 dependency commit**: `298d56210b9d9e66cde8f96481d6053925c6ae15`
 - **Upstream fix**: Merged in [PR #37](https://github.com/untrustedmodders/plugify-plugin-polyhook/pull/37), commit `0aadc50fb66afd5c77af4f601e5e4b25e1be7b86`
 
-An unpatched `2.5.7` Linux binary can leave the final page of an unaligned trampoline range non-executable. Because the `2.5.7` version string alone does not indicate whether the fix is compiled in, verify that your Linux PolyHook binary includes this patch before deploying (Windows servers can use the stock `2.5.7` build).
+An unpatched `2.5.7` Linux binary can leave the final page of an unaligned trampoline range non-executable. Verify that legacy Linux packages include this patch before deploying them.

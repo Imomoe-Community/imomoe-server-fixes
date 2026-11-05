@@ -312,7 +312,7 @@ bool ReadNativeTeamCapacities( std::array<NativeTeamCapacity, 2>& capacities, st
 			counterTerroristSpawnPoints < 0 || counterTerroristSpawnPoints > kMaxInt ||
 			maxTerrorists < 0 || maxTerrorists > kMaxInt ||
 			maxCounterTerrorists < 0 || maxCounterTerrorists > kMaxInt ) {
-			error = "Build 26393695 native spawn capacity fields returned an invalid value";
+			error = "Build 26445667 native spawn capacity fields returned an invalid value";
 			return false;
 		}
 		capacities = {
@@ -655,8 +655,8 @@ bool RecountNativeSpawnLists( std::string& error ) noexcept {
 			return false;
 		}
 		// SpawnPoint::Spawn already registers new full handles. The null argument
-		// rebuilds enabled/identity-checked capacity, without the LevelInit scanner's
-		// live-player occupancy test (Build 26393695, Win 913B20 / Linux 13A6D50).
+		// rebuilds enabled/identity-checked capacity without the LevelInit scanner's
+		// live-player occupancy test.
 		using RecountFunction = void ( * )( void*, void* );
 		const auto recount = reinterpret_cast<RecountFunction>( g_nativeSpawnRecount );
 		recount( rules, nullptr );
@@ -702,7 +702,7 @@ std::string_view ClassnameFor( Team team ) noexcept {
 	return team == Team::Terrorist ? "info_player_terrorist" : "info_player_counterterrorist";
 }
 
-// Read-only Build 26393695 primary-vector layout, verified in both native
+// Read-only Build 26445667 primary-vector layout, verified in both native
 // registration helpers. Capacity counts remain exclusively engine-produced.
 struct NativeSpawnList {
 	std::int32_t count{};

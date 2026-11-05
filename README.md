@@ -315,3 +315,39 @@ cmake --build build --config Release
 ### License
 
 The project source licensed under **AGPL-3.0-or-later** (see [`LICENSE`](LICENSE)). Third-party files, such as the S2SDK bindings, retain their own license notices.
+## One-command paired builds
+
+Run the same entry on Windows and Linux to build the complete plugin ZIP for
+each platform. It checks the pinned S2SDK, runs ServerFixes' Python, policy and
+callback tests, builds the production plugin, and packages the manifest,
+gamedata, config and paired dependency licenses. Linux compilation and callback
+tests run in the pinned Steam Runtime container. ServerFixes continues to use
+its checked-in 161-method/6-prototype generated imports; the paired SDK checkout
+provides only the matching build and runtime libraries.
+
+The host needs Python 3.11+, Git, CMake, Ninja on Linux, and the project C++23
+toolchain (Visual Studio x64 on Windows; Docker on Linux). Install
+`plugify-gen` 1.2.15 in `.work/tools/plugify-gen-v1.2.15/` or pass
+`--generator PATH`. Callback tests load the real CS2 `tier0` runtime: pass the
+matching `game/bin/win64` or `game/bin/linuxsteamrt64` directory through
+`--cs2-bin`, or set `CS2_GAME_BIN`. The script checks the library and sets the
+test process search path; it never skips the callback test.
+
+Windows (PowerShell):
+
+```powershell
+python tools/build_paired.py --funrounds-source D:/git/Imomoe-FunRounds-CS2 --cs2-bin D:/path/to/game/bin/win64
+```
+
+Linux/WSL (x64 with Docker):
+
+```bash
+python3 tools/build_paired.py --funrounds-source /path/to/Imomoe-FunRounds-CS2 --cs2-bin /path/to/game/bin/linuxsteamrt64
+```
+
+`--work-name` defaults to the current timestamp. To reuse a clean, already
+pinned source checkout, pass `--resume-source PATH`. The selected work name must
+not exist in either repository's `.work/`. Command output is captured under
+`.work/serverfixes-<name>/logs/`; the verified ZIP is written to
+`dist/imomoe-server-fixes-<platform>-<name>.zip`. Installing it is a separate
+operation.

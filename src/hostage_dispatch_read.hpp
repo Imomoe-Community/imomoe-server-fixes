@@ -3,56 +3,28 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
-
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#elif defined(__linux__)
-#include <sys/syscall.h>
-#include <sys/uio.h>
-#include <unistd.h>
-#else
-#error "Hostage dispatch pointer reads are supported only on Windows and Linux"
-#endif
 
 namespace imomoe::server_fixes::hostage {
 
 inline bool ReadHostageDispatchTarget( const void* dispatchArgument, std::int32_t& targetHandle ) noexcept {
-	if ( !dispatchArgument ) {
-		return false;
-	}
+	constexpr std::uintptr_t kMinUserAddress = 0x10000;
+	constexpr std::uintptr_t kHandlePointerOffset = 8;
 	const auto base = reinterpret_cast<std::uintptr_t>( dispatchArgument );
-	if ( base > std::numeric_limits<std::uintptr_t>::max() - 16 ) {
+	if ( base < kMinUserAddress || base % alignof( std::uintptr_t ) != 0 ||
+		base > std::numeric_limits<std::uintptr_t>::max() - kHandlePointerOffset - sizeof( std::uintptr_t ) ) {
 		return false;
 	}
 
+	// The matched native handler reads these same fields on entry.
 	std::uintptr_t handleStorage{};
-	const auto readBytes = []( const void* source, void* destination, std::size_t size ) noexcept {
-#if defined(_WIN32)
-		SIZE_T bytesRead{};
-		return ::ReadProcessMemory( ::GetCurrentProcess(), source, destination, size, &bytesRead ) != 0 &&
-			bytesRead == size;
-#else
-		iovec local{ destination, size };
-		iovec remote{ const_cast<void*>( source ), size };
-		const auto bytesRead = ::syscall( SYS_process_vm_readv, ::getpid(), &local, 1, &remote, 1, 0 );
-		return bytesRead == static_cast<long>( size );
-#endif
-	};
-	if ( !readBytes( reinterpret_cast<const void*>( base + 8 ), &handleStorage, sizeof( handleStorage ) ) ||
-		!handleStorage ) {
+	std::memcpy( &handleStorage, reinterpret_cast<const void*>( base + kHandlePointerOffset ), sizeof( handleStorage ) );
+	if ( handleStorage < kMinUserAddress || handleStorage % alignof( std::int32_t ) != 0 ) {
 		return false;
 	}
-	std::int32_t decodedHandle{};
-	if ( !readBytes( reinterpret_cast<const void*>( handleStorage ), &decodedHandle, sizeof( decodedHandle ) ) ) {
-		return false;
-	}
-	targetHandle = decodedHandle;
+	std::memcpy( &targetHandle, reinterpret_cast<const void*>( handleStorage ), sizeof( targetHandle ) );
 	return true;
 }
 

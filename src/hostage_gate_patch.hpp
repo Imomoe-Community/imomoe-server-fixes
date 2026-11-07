@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -27,36 +28,26 @@ class GatePatch final {
 public:
     bool active() const noexcept { return active_; }
 
-    bool supports_current_build() const { return locate_module().ok; }
-
-    bool code_recognized() const {
-        const auto module = locate_module();
+    bool code_recognized() {
+        const auto& module = cached_module();
         if (!module.ok) return false;
         const auto* const target = reinterpret_cast<const std::uint8_t*>(module.base + kGateRva);
         return equals(target, kOriginal) || equals(target, kPatched);
     }
 
+    void invalidate_module() noexcept { module_.reset(); }
+
     void game_thread_seen() noexcept { game_thread_ = current_thread(); }
 
-    std::string status() const {
-        const auto module = locate_module();
-        if (!module.ok) return "hostage_gate=unavailable reason=" + module.reason;
-        const auto* const target = reinterpret_cast<const std::uint8_t*>(module.base + kGateRva);
-        std::string result;
-        if (equals(target, kOriginal)) result = "hostage_gate=off";
-        else if (equals(target, kPatched)) result = "hostage_gate=on";
-        else result = "hostage_gate=unknown_code";
-        result += " platform=";
-        result += platform_name();
-        result += " module=" + module.identity;
-        result += active_ ? " owned=yes" : " owned=no";
-        if (protection_pending_) result += " protection_restore=pending";
-        return result;
-    }
-
-    std::string enable() {
+    void enable() {
+        const bool had_module = module_ && module_->present;
+        const auto& observed = cached_module();
+        if (active_ && !protection_pending_ && observed.ok && observed.base == base_ && observed.identity == identity_
+            && equals(reinterpret_cast<const std::uint8_t*>(base_ + kGateRva), kPatched)) return;
         require_game_thread();
-        const auto module = locate_module();
+        // Recheck the mapping before changing bytes or recovering protection.
+        if (had_module && observed.ok) module_ = locate_module();
+        const auto& module = *module_;
         if (!module.ok) {
             if (!module.present) clear_ownership();
             throw std::runtime_error("unsupported module: " + module.reason);
@@ -74,7 +65,7 @@ public:
                     }
                     protection_pending_ = false;
                 }
-                return status();
+                return;
             } else if (equals(target, kOriginal)) {
                 if (protection_pending_ && !restore_protection(target, original_protection_)) {
                     throw std::runtime_error("original gate bytes are present, but page protection restoration is pending");
@@ -88,7 +79,7 @@ public:
             throw std::runtime_error("hostage gate bytes differ from the expected unpatched build; no write made");
         }
 
-        const auto write = write_code(target, kPatched, false, 0);
+        const auto write = write_code(module, target, kPatched, false, 0);
         if (!write.bytes_written) {
             throw std::runtime_error("could not make the hostage gate code page writable");
         }
@@ -107,23 +98,23 @@ public:
         if (protection_pending_) {
             throw std::runtime_error("hostage gate is active, but original page protection was not restored; retry sf_hostage_compat 0");
         }
-        return status();
     }
 
-    std::string disable() {
-        if (!active_) return status();
+    void disable() {
+        if (!active_) return;
         require_game_thread();
-        const auto module = locate_module();
+        module_ = locate_module();
+        const auto& module = *module_;
         if (!module.present) {
             clear_ownership();
-            return "hostage_gate=restored module_unloaded";
+            return;
         }
         if (module.base != base_) {
             // There is exactly one module with this loader name. Its base moved,
             // so the patched mapping was unloaded rather than reused at an old
             // address. Do not touch the newly loaded image.
             clear_ownership();
-            return "hostage_gate=restored module_reloaded";
+            return;
         }
         if (!module.ok) {
             throw std::runtime_error("hostage module is still present at the owned base but no longer matches the analyzed build; refusing a stale write");
@@ -138,13 +129,13 @@ public:
                 throw std::runtime_error("original gate bytes are back, but page protection restoration is still pending; retry sf_hostage_compat 0");
             }
             clear_ownership();
-            return "hostage_gate=restored";
+            return;
         }
         if (!equals(target, kPatched)) {
             throw std::runtime_error("hostage gate was changed by another writer; preserving those bytes");
         }
 
-        const auto write = write_code(target, kOriginal, true, original_protection_);
+        const auto write = write_code(module, target, kOriginal, true, original_protection_);
         if (!write.bytes_written) {
             throw std::runtime_error("could not make the owned hostage gate writable; ownership retained");
         }
@@ -156,7 +147,6 @@ public:
             throw std::runtime_error("original gate bytes are restored, but page protection restoration is pending; retry sf_hostage_compat 0");
         }
         clear_ownership();
-        return "hostage_gate=restored";
     }
 
 private:
@@ -172,6 +162,11 @@ private:
 #endif
     };
 
+    const Module& cached_module() {
+        if (!module_ || !module_->present) module_ = locate_module();
+        return *module_;
+    }
+
     struct WriteResult {
         bool bytes_written{};
         bool protection_restored{};
@@ -184,7 +179,6 @@ private:
     static constexpr std::array<std::uint8_t, 9> kOriginal{0x80, 0xBD, 0x44, 0x03, 0x00, 0x00, 0x03, 0x75, 0x30};
     static constexpr std::array<std::uint8_t, 9> kPatched{0xF6, 0x85, 0x44, 0x03, 0x00, 0x00, 0x02, 0x74, 0x30};
     static Thread current_thread() noexcept { return GetCurrentThreadId(); }
-    static std::string_view platform_name() noexcept { return "windows"; }
 
     static Module locate_module() {
         auto* const base = reinterpret_cast<std::uint8_t*>(GetModuleHandleW(L"server.dll"));
@@ -202,7 +196,7 @@ private:
     }
 
     template <std::size_t N>
-    static WriteResult write_code(std::uint8_t* target, const std::array<std::uint8_t, N>& bytes,
+    static WriteResult write_code(const Module&, std::uint8_t* target, const std::array<std::uint8_t, N>& bytes,
                                   bool use_saved_protection, int saved_protection) noexcept {
         DWORD observed{};
         if (!VirtualProtect(target, bytes.size(), PAGE_EXECUTE_READWRITE, &observed)) return {};
@@ -227,7 +221,6 @@ private:
         0x41, 0xF6, 0x85, 0x24, 0x06, 0x00, 0x00, 0x02, 0x0F, 0x85, 0x07, 0x01, 0x00, 0x00};
     static constexpr std::string_view kExpectedBuildId = "5ea0e482b46eb71c4f9615c48b34ddc36f55ca40";
     static Thread current_thread() noexcept { return static_cast<Thread>(::syscall(SYS_gettid)); }
-    static std::string_view platform_name() noexcept { return "linux"; }
 
     struct Search {
         int count{};
@@ -331,9 +324,8 @@ private:
     }
 
     template <std::size_t N>
-    static WriteResult write_code(std::uint8_t* target, const std::array<std::uint8_t, N>& bytes,
+    static WriteResult write_code(const Module& module, std::uint8_t* target, const std::array<std::uint8_t, N>& bytes,
                                   bool use_saved_protection, int saved_protection) noexcept {
-        const auto module = locate_module();
         int protection = 0;
         if (!module.ok || !segment_protection(module, target, bytes.size(), protection)) return {};
         std::uintptr_t first{};
@@ -374,6 +366,7 @@ private:
         original_protection_ = 0;
     }
 
+    std::optional<Module> module_;
     bool active_{};
     bool protection_pending_{};
     std::uintptr_t base_{};

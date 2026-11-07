@@ -9,6 +9,10 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 class PairedBuildSourceTests(unittest.TestCase):
+    def test_generated_include_contains_checked_in_sdk_header(self):
+        header = MODULE.GENERATED_INCLUDE / "s2sdk/s2sdk.hpp"
+        self.assertTrue(header.is_file(), f"Missing checked-in S2SDK header: {header}")
+
     def test_source_matches_resume_checkout_used_by_sdk_builder(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

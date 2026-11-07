@@ -9,6 +9,7 @@
 #include "chat_policy.hpp"
 #include "chat_listener.hpp"
 #include "hostage_compat.hpp"
+#include "runtime_lifecycle.hpp"
 #include "spectator_compat.hpp"
 #include "spawn_capacity.hpp"
 
@@ -102,7 +103,7 @@ s2sdk::ResultType OnClientCommand( std::int32_t slot, s2sdk::ConCommandContext c
 	}
 }
 
-void RefreshModuleStates() noexcept;
+void RefreshModuleStates( bool includeDiagnostics = false ) noexcept;
 
 bool RegisterChatListener() noexcept {
 	imomoe::server_fixes::chat::ListenerState state{
@@ -152,7 +153,7 @@ s2sdk::ResultType OnStatusCommand( std::int32_t slot, s2sdk::ConCommandContext c
 		return s2sdk::ResultType::Continue;
 	}
 	try {
-		RefreshModuleStates();
+		RefreshModuleStates( true );
 		const auto chat = ModuleLine( "chat_admission", g_chat );
 		const auto hostage = ModuleLine( "hostage_compat", g_hostage );
 		const auto spawnCapacity = ModuleLine( "spawn_capacity", g_spawnCapacity );
@@ -207,7 +208,7 @@ bool UnregisterStatusCommand() noexcept {
 		[&] { return s2sdk::RemoveCommand( name, OnStatusCommand ); } );
 }
 
-void RefreshModuleStates() noexcept {
+void RefreshModuleStates( bool includeDiagnostics ) noexcept {
 	if ( !g_lifecycleActive ) {
 		return;
 	}
@@ -215,12 +216,14 @@ void RefreshModuleStates() noexcept {
 	g_hostage.enabled = ReadEnabled( g_hostageConVar, g_hostage.enabled );
 	g_spawnCapacity.enabled = ReadEnabled( g_spawnCapacityConVar, g_spawnCapacity.enabled );
 	g_spectatorCompat.enabled = ReadEnabled( g_spectatorCompatConVar, g_spectatorCompat.enabled );
+	const bool lifecycleReady = imomoe::server_fixes::runtime_lifecycle::EnsureRegistered(
+		imomoe::server_fixes::hostage::OnMapEnd );
 	const auto hostageStatus = imomoe::server_fixes::hostage::Update( g_hostage.enabled, g_hostageConVar );
 	g_hostage.available = hostageStatus.available;
 	g_hostage.reason = hostageStatus.reason;
-	const bool schemaQueriesReady = imomoe::server_fixes::hostage::SchemaQueriesReady();
+	const bool schemaQueriesReady = lifecycleReady && imomoe::server_fixes::runtime_lifecycle::SchemaQueriesReady();
 	if ( schemaQueriesReady ) {
-		const auto spawnStatus = imomoe::server_fixes::spawn_capacity::Update( g_spawnCapacity.enabled );
+		const auto spawnStatus = imomoe::server_fixes::spawn_capacity::Update( g_spawnCapacity.enabled, includeDiagnostics );
 		g_spawnCapacity.available = spawnStatus.available;
 		g_spawnCapacity.reason = spawnStatus.reason;
 	} else {
@@ -301,9 +304,10 @@ public:
 				const bool hostageClean = imomoe::server_fixes::hostage::Shutdown();
 				const bool spawnClean = imomoe::server_fixes::spawn_capacity::Shutdown();
 				const bool spectatorClean = imomoe::server_fixes::spectator_compat::Shutdown();
+				const bool lifecycleClean = imomoe::server_fixes::runtime_lifecycle::Shutdown();
 				const bool chatClean = UnregisterChatListener();
 				const bool statusClean = UnregisterStatusCommand();
-				if ( !hostageClean || !spawnClean || !spectatorClean || !chatClean || !statusClean ) {
+				if ( !hostageClean || !spawnClean || !spectatorClean || !lifecycleClean || !chatClean || !statusClean ) {
 					return plg::PluginResult{ "ServerFixes status registration failed; callback cleanup could not be verified" };
 				}
 				return plg::PluginResult{ "ServerFixes could not register sf_status" };
@@ -318,6 +322,7 @@ public:
 			(void)imomoe::server_fixes::hostage::Shutdown();
 			(void)imomoe::server_fixes::spawn_capacity::Shutdown();
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
+			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			(void)UnregisterChatListener();
 			(void)UnregisterStatusCommand();
 			return plg::PluginResult{ "ServerFixes startup threw" };
@@ -329,6 +334,7 @@ public:
 			(void)imomoe::server_fixes::hostage::Shutdown();
 			(void)imomoe::server_fixes::spawn_capacity::Shutdown();
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
+			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			if ( g_chatListenerRegistered ) {
 				(void)UnregisterChatListener();
 			}
@@ -351,9 +357,10 @@ public:
 			const bool hostageClean = imomoe::server_fixes::hostage::Shutdown();
 			const bool spawnClean = imomoe::server_fixes::spawn_capacity::Shutdown();
 			const bool spectatorClean = imomoe::server_fixes::spectator_compat::Shutdown();
+			const bool lifecycleClean = imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			const bool chatClean = UnregisterChatListener();
 			const bool statusClean = UnregisterStatusCommand();
-			if ( !hostageClean || !spawnClean || !spectatorClean || !chatClean || !statusClean ) {
+			if ( !hostageClean || !spawnClean || !spectatorClean || !lifecycleClean || !chatClean || !statusClean ) {
 				return plg::PluginResult{ "ServerFixes callbacks or owned changes could not be removed" };
 			}
 			return {};
@@ -361,6 +368,7 @@ public:
 			(void)imomoe::server_fixes::hostage::Shutdown();
 			(void)imomoe::server_fixes::spawn_capacity::Shutdown();
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
+			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			(void)UnregisterChatListener();
 			(void)UnregisterStatusCommand();
 			return plg::PluginResult{ "ServerFixes cleanup threw" };

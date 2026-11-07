@@ -57,7 +57,7 @@ namespace s2sdk {
     return __s2sdk_OnBuildGameSessionManifest_Unregister(callback);
   }
 
-  using _OnMapStart_Register = void (*)(OnMapEndCallback);
+  using _OnMapStart_Register = void (*)(OnMapStartCallback);
 }
 extern "C" PLUGIN_API s2sdk::_OnMapStart_Register __s2sdk_OnMapStart_Register;
 namespace s2sdk {
@@ -65,11 +65,11 @@ namespace s2sdk {
    * @brief Register callback to event.
    * @param callback (function): Function callback.
    */
-  inline void OnMapStart_Register(OnMapEndCallback callback) {
+  inline void OnMapStart_Register(OnMapStartCallback callback) {
     return __s2sdk_OnMapStart_Register(callback);
   }
 
-  using _OnMapStart_Unregister = void (*)(OnMapEndCallback);
+  using _OnMapStart_Unregister = void (*)(OnMapStartCallback);
 }
 extern "C" PLUGIN_API s2sdk::_OnMapStart_Unregister __s2sdk_OnMapStart_Unregister;
 namespace s2sdk {
@@ -77,7 +77,7 @@ namespace s2sdk {
    * @brief Unregister callback to event.
    * @param callback (function): Function callback.
    */
-  inline void OnMapStart_Unregister(OnMapEndCallback callback) {
+  inline void OnMapStart_Unregister(OnMapStartCallback callback) {
     return __s2sdk_OnMapStart_Unregister(callback);
   }
 

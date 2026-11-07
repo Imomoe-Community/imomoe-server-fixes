@@ -98,6 +98,9 @@ bool UnregisterMapEnd() noexcept {
 }
 
 std::uint64_t SpectatorConVar() noexcept {
+	if ( g_conVarHandle != 0 ) {
+		return g_conVarHandle;
+	}
 	try {
 		g_conVarHandle = s2sdk::FindConVar( plg::string( kConVarName ) );
 	} catch ( ... ) {

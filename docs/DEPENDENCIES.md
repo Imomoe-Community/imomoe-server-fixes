@@ -8,11 +8,11 @@ When building the full `imomoe_server_fixes` plugin, use the pinned versions bel
 
 | 组件 / Input | 验证版本或来源 / Validated Version or Source |
 | --- | --- |
-| **S2SDK** | `3.1.1`, [signed fork commit `c21cd03`](https://github.com/Mai-Ooizumi/plugify-plugin-s2sdk/tree/c21cd032e0dd459a5f057b25d21473c29f6acff2) |
+| **S2SDK** | `3.3.0`, [signed fork commit `196bb40`](https://github.com/Mai-Ooizumi/plugify-plugin-s2sdk/tree/196bb40362e04685c507bb953ebe367ddb9429df) |
 | **SourceSDK** | S2SDK 子模块指针 [`f3de33c`](https://github.com/Wend4r/sourcesdk/tree/f3de33c58595c628c12b4ffaba76dfcd49b8763f) |
 | **Plugify Host** | `3.1.0` |
 | **Plugify C++ Language Module** | `2.4.5` |
-| **PolyHook** | `2.5.8`（本轮 Windows/Linux runtime 均已验证；Linux `2.5.7` 旧包仍需下方的内存页修复 / runtime-tested on Windows and Linux; legacy Linux `2.5.7` packages still need the page-range fix below） |
+| **PolyHook** | [`2.5.9`](https://github.com/untrustedmodders/plugify-plugin-polyhook/releases/tag/v2.5.9)（当前双端配对版本 / current Windows/Linux pair） |
 | **plugify-gen** | `1.2.15`（仅在需要从 `bindings/s2sdk.pplugin` 重新生成绑定时使用 / for intentional binding regeneration） |
 
 请检出上述固定提交的 S2SDK 并递归初始化其子模块（`git submodule update --init --recursive`）。编译本插件所需的 SourceSDK 公共头文件、生成的 Protobuf 头文件（`external/sourcesdk/protos`）、静态库 `tier0_perproject` 以及运行时 `tier0` 导入库均来自该 S2SDK 工作树及其已完成构建的 `build` 目录。具体 CMake 参数请参考 [README 构建指南](../README.md#build-the-plugin-with-the-paired-sdk)。
@@ -25,7 +25,7 @@ Check out S2SDK at the fixed commit above with recursive submodules initialized.
 
 ### 简体中文
 
-本轮双端 runtime 使用 PolyHook `2.5.8`。若 Linux 环境仍使用旧版 `2.5.7`，必须包含针对 `mem_protect` 的跨页长度取整修复：在向上对齐受保护内存区域长度时，需要将起始地址自身的页内偏移（Page Offset）一并计入。
+若 Linux 环境仍使用旧版 `2.5.7`，必须包含针对 `mem_protect` 的跨页长度取整修复：在向上对齐受保护内存区域长度时，需要将起始地址自身的页内偏移（Page Offset）一并计入。
 
 - **插件源码基准提交**：`5892ea6a0ce7e8c48748e054e91bbf4df973cc9f`
 - **PolyHook_2 子模块提交**：`298d56210b9d9e66cde8f96481d6053925c6ae15`
@@ -35,7 +35,7 @@ Check out S2SDK at the fixed commit above with recursive submodules initialized.
 
 ### English
 
-The paired Windows and Linux runtime checks for this update used PolyHook `2.5.8`. If Linux deployments still use the older `2.5.7` package, it requires the `mem_protect` page-range calculation fix: include the starting address's page offset when rounding up the protected memory length.
+If Linux deployments still use the older `2.5.7` package, it requires the `mem_protect` page-range calculation fix: include the starting address's page offset when rounding up the protected memory length.
 
 - **Plugin source base**: `5892ea6a0ce7e8c48748e054e91bbf4df973cc9f`
 - **PolyHook_2 dependency commit**: `298d56210b9d9e66cde8f96481d6053925c6ae15`

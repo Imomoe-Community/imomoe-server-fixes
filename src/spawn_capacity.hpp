@@ -12,7 +12,7 @@ struct Status {
 	std::string reason;
 };
 
-Status Update( bool enabled ) noexcept;
+Status Update( bool enabled, bool includeDiagnostics = false ) noexcept;
 bool Shutdown() noexcept;
 
 } // namespace imomoe::server_fixes::spawn_capacity

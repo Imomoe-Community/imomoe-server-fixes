@@ -6,6 +6,7 @@
 #include "../src/spawn_capacity.cpp"
 #include "../src/spectator_compat.cpp"
 #include "../src/hostage_compat.hpp"
+#include "../src/runtime_lifecycle.hpp"
 
 #include <appframework/iappsystem.h>
 
@@ -107,6 +108,7 @@ bool g_invalidCreatedSpawnGeometry{};
 void* g_currentRules{ g_rulesObject };
 std::int64_t g_rulesSpectatorLimit{};
 std::int64_t g_rulesTerroristSpawnCount{};
+std::int64_t g_minReportedTSpawnCount{};
 std::int64_t g_rulesCounterTerroristSpawnCount{};
 std::int64_t g_rulesMaxTerrorists{ 12 };
 std::int64_t g_rulesMaxCounterTerrorists{ 12 };
@@ -124,10 +126,11 @@ std::int32_t g_gameConfigCloses{};
 s2sdk::ConfigId g_lastClosedGameConfig{};
 std::string g_loadedGameConfigPath;
 std::string g_spectatorConVar{ "0" };
-s2sdk::OnMapEndCallback g_spawnMapStartCallback{};
+s2sdk::OnMapStartCallback g_spawnMapStartCallback{};
 s2sdk::OnMapEndCallback g_spectatorMapEndCallback{};
-std::vector<s2sdk::OnMapEndCallback> g_mapStartListeners;
+std::vector<s2sdk::OnMapStartCallback> g_mapStartListeners;
 std::vector<s2sdk::OnMapEndCallback> g_mapEndListeners;
+std::int32_t g_eventHookCalls{};
 s2sdk::OnClientDisconnectCallback g_disconnectCallback{};
 bool g_spectatorSchemaChainAvailable{ true };
 struct SchemaSetCall {
@@ -144,6 +147,8 @@ struct FakeCommandListener {
 	s2sdk::HookMode mode{};
 };
 std::vector<FakeCommandListener> g_commandListeners;
+enum class AddCommandFailure { None, Reject, ThrowAfterAdding };
+AddCommandFailure g_secondCommandFailure{};
 bool g_fakeRemoveCommandFails{};
 bool g_fakeRemoveCommandReturnsFalseAfterRemoval{};
 
@@ -441,6 +446,7 @@ std::int64_t FakeNativeSpawnRefresh( void* rules, void* spawn ) {
 		g_rulesTerroristSpawnCount = std::count_if( g_entities.begin(), g_entities.end(), []( const FakeEntity& entity ) {
 			return entity.alive && entity.enabled && entity.registered && entity.classname == "info_player_terrorist";
 		} );
+		g_rulesTerroristSpawnCount = std::max( g_rulesTerroristSpawnCount, g_minReportedTSpawnCount );
 		g_rulesCounterTerroristSpawnCount = std::count_if( g_entities.begin(), g_entities.end(), []( const FakeEntity& entity ) {
 			return entity.alive && entity.enabled && entity.registered && entity.classname == "info_player_counterterrorist";
 		} );
@@ -586,7 +592,14 @@ void FakeReplyToCommand( s2sdk::ConCommandContext, std::int32_t, const plg::stri
 
 bool FakeAddConsoleCommand( const plg::string& name, const plg::string&, s2sdk::ConVarFlag,
 	s2sdk::ConCommandCallback, s2sdk::HookMode ) {
+	const bool secondCommand = std::string_view( name.data(), name.size() ) == "sf_spawn_list";
+	if ( secondCommand && g_secondCommandFailure == AddCommandFailure::Reject ) {
+		return false;
+	}
 	g_registeredCommands.emplace_back( name.data(), name.size() );
+	if ( secondCommand && g_secondCommandFailure == AddCommandFailure::ThrowAfterAdding ) {
+		throw std::runtime_error( "injected command registration exception" );
+	}
 	return true;
 }
 
@@ -637,6 +650,7 @@ bool FakeRemoveCommandListener( const plg::string& name, s2sdk::ConCommandCallba
 }
 
 s2sdk::EventHookError FakeHookEvent( const plg::string&, s2sdk::EventCallback, s2sdk::HookMode ) {
+	++g_eventHookCalls;
 	return s2sdk::EventHookError::Okay;
 }
 
@@ -657,12 +671,12 @@ void FakeOnMapEndUnregister( s2sdk::OnMapEndCallback callback ) {
 	}
 }
 
-void FakeOnMapStartRegister( s2sdk::OnMapEndCallback callback ) {
+void FakeOnMapStartRegister( s2sdk::OnMapStartCallback callback ) {
 	g_spawnMapStartCallback = callback;
 	g_mapStartListeners.push_back( callback );
 }
 
-void FakeOnMapStartUnregister( s2sdk::OnMapEndCallback callback ) {
+void FakeOnMapStartUnregister( s2sdk::OnMapStartCallback callback ) {
 	g_mapStartListeners.erase( std::remove( g_mapStartListeners.begin(), g_mapStartListeners.end(), callback ),
 		g_mapStartListeners.end() );
 	if ( callback == g_spawnMapStartCallback ) {
@@ -824,6 +838,7 @@ void ResetSpawnModule( std::string map ) {
 	g_foreignRawCommandVeto = false;
 	g_nativeRefreshCalls = 0;
 	g_rulesTerroristSpawnCount = 0;
+	g_minReportedTSpawnCount = 0;
 	g_rulesCounterTerroristSpawnCount = 0;
 	g_rulesMaxTerrorists = g_actualMaxPlayers;
 	g_rulesMaxCounterTerrorists = g_actualMaxPlayers;
@@ -1023,16 +1038,37 @@ void TestAdminCommandCleanupUsesCallbackAbsencePostcondition() {
 	Require( g_registeredCommands.size() == 4, "the fixture should observe all owned spawn administration commands" );
 
 	g_fakeRemoveCommandFails = true;
-	Require( !UnregisterAdminCommands( error ) && g_adminCommandsRegistered &&
+	Require( !UnregisterAdminCommands( error ) &&
 		error.find( "RemoveCommand returned false" ) != std::string::npos,
 		"cleanup must retain RemoveCommand=false context while callbacks remain registered" );
 
 	g_fakeRemoveCommandFails = false;
 	g_fakeRemoveCommandReturnsFalseAfterRemoval = true;
 	error.clear();
-	Require( UnregisterAdminCommands( error ) && !g_adminCommandsRegistered && g_registeredCommands.empty() && error.empty(),
+	Require( UnregisterAdminCommands( error ) && g_registeredCommands.empty() && error.empty(),
 		"RemoveCommand=false is clean when HasConsoleCommandCallbacks confirms the owned callbacks are absent" );
 	g_fakeRemoveCommandReturnsFalseAfterRemoval = false;
+}
+
+void TestPartialAdminRegistrationRemainsOwnedAfterFailedRollback() {
+	using namespace imomoe::server_fixes::spawn_capacity;
+	for ( const auto failure : { AddCommandFailure::Reject, AddCommandFailure::ThrowAfterAdding } ) {
+		ResetSpawnModule( "de_poseidon" );
+		g_secondCommandFailure = failure;
+		g_fakeRemoveCommandFails = true;
+		std::string error;
+		Require( !RegisterAdminCommands( error ) && error.find( "could not confirm removal" ) != std::string::npos,
+			"partial registration should report the failed rollback" );
+		const std::vector<std::string> expected = failure == AddCommandFailure::Reject ?
+			std::vector<std::string>{ "sf_spawn_add" } : std::vector<std::string>{ "sf_spawn_add", "sf_spawn_list" };
+		Require( g_registeredCommands == expected && !Shutdown(),
+			"shutdown must report callbacks left behind by a failed rollback" );
+
+		g_fakeRemoveCommandFails = false;
+		g_secondCommandFailure = AddCommandFailure::None;
+		Require( Shutdown() && g_registeredCommands.empty(),
+			"the next shutdown retries and removes every partially registered callback" );
+	}
 }
 
 void TestNativeRefreshReadbackFollowsActualTeamAllowance( const char* map ) {
@@ -1110,12 +1146,14 @@ void TestUpdateReportsExternalTeamCapacityAndKeepsEffectiveReadbackCurrent() {
 	std::string error;
 	Require( ReconcileAutomaticCapacity( error ), "team capacity should be initialized before the external override" );
 	const auto initialRefreshCalls = g_nativeRefreshCalls;
-	const auto initialStatus = Update( true );
+	Require( Update( true ).reason == "enabled",
+		"ordinary updates should skip the detailed ready-map diagnostic" );
+	const auto initialStatus = Update( true, true );
 	Require( initialStatus.available && initialStatus.reason.find( "T=32 CT=32 / maxplayers=32" ) != std::string::npos,
 		"the actual Update path should publish the ready native allowance before an external change" );
 
 	g_rulesMaxTerrorists = 40;
-	auto status = Update( true );
+	auto status = Update( true, true );
 	Require( status.available && status.reason.find( "T max-team capacity has an external owner" ) != std::string::npos,
 		"the actual Update path should report a sufficient external T max-team override" );
 	Require( g_teamMaximumYielded[0] && g_effectiveTeamCapacities[0].teamMaximum == 40 &&
@@ -1135,7 +1173,7 @@ void TestUpdateReportsExternalTeamCapacityAndKeepsEffectiveReadbackCurrent() {
 		"repeated status updates must read team maxima without running the native spawn scanner" );
 
 	g_rulesMaxTerrorists = 32;
-	status = Update( true );
+	status = Update( true, true );
 	Require( status.available && status.reason.find( "T max-team capacity has an external owner" ) != std::string::npos,
 		"the same yielded owner may restore usable capacity without being reacquired" );
 	Require( g_rulesMaxTerrorists == 32 && g_teamMaximumYielded[0] &&
@@ -1503,13 +1541,62 @@ void TestProductionManualSaveLoadRoundTrip() {
 	g_gameDirectory = previousGameDirectory;
 }
 
+void TestDisabledHostageDoesNotOwnFeatureListeners() {
+	using namespace imomoe::server_fixes;
+	const auto eventHooks = g_eventHookCalls;
+	Require( runtime_lifecycle::EnsureRegistered( hostage::OnMapEnd ), "plugin map listeners must be available" );
+	DispatchMapStart();
+	const auto disconnect = g_disconnectCallback;
+	(void)hostage::Update( false, 0 );
+	Require( runtime_lifecycle::SchemaQueriesReady() && g_eventHookCalls == eventHooks &&
+		g_disconnectCallback == disconnect,
+		"disabled hostage must leave plugin schema readiness independent and acquire no round/player hooks" );
+	Require( hostage::Shutdown() && runtime_lifecycle::Shutdown(),
+		"disabled hostage and the plugin lifecycle should shut down independently" );
+}
+
+void TestAutomaticCapacityBatchesGrowthAndShrink() {
+	using namespace imomoe::server_fixes::spawn_capacity;
+	ResetSpawnModule( "de_poseidon" );
+	const auto previousMaxPlayers = g_actualMaxPlayers;
+	g_actualMaxPlayers = 10;
+	AddNativeSource( Team::Terrorist );
+	AddNativeSource( Team::CounterTerrorist );
+	std::string error;
+	const auto beforeGrowth = g_nativeRefreshCalls;
+	Require( ReconcileAutomaticCapacity( error ) && g_rulesTerroristSpawnCount == 10 &&
+		g_rulesCounterTerroristSpawnCount == 10 && g_nativeRefreshCalls - beforeGrowth <= 3,
+		"growth refreshes native lists once for the baseline and once per team, not once per created point" );
+
+	g_actualMaxPlayers = 4;
+	g_delayEntityRemoval = true;
+	const auto beforeShrink = g_nativeRefreshCalls;
+	Require( ReconcileAutomaticCapacity( error ) && g_rulesTerroristSpawnCount == 4 &&
+		g_rulesCounterTerroristSpawnCount == 4 && g_nativeRefreshCalls - beforeShrink <= 3,
+		"shrink refreshes native lists per team and excludes disabled points before deferred removal" );
+	Require( CountOwned( Team::Terrorist, true ) == 3 && CountOwned( Team::CounterTerrorist, true ) == 3 &&
+		!HasPendingOwnedRemoval( Team::Terrorist ) && !HasPendingOwnedRemoval( Team::CounterTerrorist ),
+		"retired handles no longer count toward the active automatic budget" );
+	g_actualMaxPlayers = 2;
+	g_minReportedTSpawnCount = 3;
+	const auto removals = g_removeEntityCalls;
+	Require( !ReconcileAutomaticCapacity( error ) && g_removeEntityCalls == removals,
+		"one-count readback decrease must not authorize deletion of two retired points" );
+	g_minReportedTSpawnCount = 0;
+	Require( Update( true ).available && g_rulesTerroristSpawnCount == 2 &&
+		g_rulesCounterTerroristSpawnCount == 2 && g_removeEntityCalls > removals,
+		"the next update retries retirement after the full native count decrease becomes visible" );
+	Require( Shutdown(), "batched capacity releases remaining owned points" );
+	g_actualMaxPlayers = previousMaxPlayers;
+}
+
 void TestActualSameNameMapCallbacksRebuildWithoutDuplicates() {
 	using namespace imomoe::server_fixes::spawn_capacity;
-	using imomoe::server_fixes::hostage::SchemaQueriesReady;
+	using imomoe::server_fixes::runtime_lifecycle::SchemaQueriesReady;
 	const auto previousMaxPlayers = g_actualMaxPlayers;
 	g_actualMaxPlayers = 6;
 	ResetSpawnModule( "de_mirage" );
-	Require( imomoe::server_fixes::hostage::Shutdown(), "hostage lifecycle state should begin clean" );
+	Require( imomoe::server_fixes::runtime_lifecycle::Shutdown(), "plugin lifecycle state should begin clean" );
 	Require( !SchemaQueriesReady(), "schema access starts closed before the SDK map-start callback" );
 	g_schemaOffsetReadCalls = 0;
 	const auto previousGameDirectory = g_gameDirectory;
@@ -1525,13 +1612,12 @@ void TestActualSameNameMapCallbacksRebuildWithoutDuplicates() {
 	} };
 	std::string error;
 	Require( SaveManualPoints( g_manualPoints, error ), "map callback fixture must persist one manual point" );
-	(void)imomoe::server_fixes::hostage::Update( false, 0 );
+	Require( imomoe::server_fixes::runtime_lifecycle::EnsureRegistered(), "plugin map listeners must be registered" );
 	Require( !SchemaQueriesReady() && g_mapStartListeners.size() == 1 && g_schemaOffsetReadCalls == 0,
-		"the production host update must register its map-start listener without querying schemas early" );
+		"the plugin lifecycle must register its map-start listener without querying schemas early" );
 	DispatchMapStart();
 	Require( SchemaQueriesReady(),
-		"the registered production hostage callback must open schema readiness at the SDK map-start dispatch" );
-	(void)imomoe::server_fixes::hostage::Update( false, 0 );
+		"the registered plugin lifecycle callback must open schema readiness at the SDK map-start dispatch" );
 	// The spawn module is deliberately first updated only after the host opens
 	// schema readiness, matching RefreshModuleStates on its next normal tick.
 	// ResetSpawnModule normally marks a prior map-load attempt for other tests;
@@ -1554,7 +1640,6 @@ void TestActualSameNameMapCallbacksRebuildWithoutDuplicates() {
 	}
 	DispatchMapStart();
 	Require( SchemaQueriesReady(), "the next SDK map-start dispatch must reopen schema readiness" );
-	(void)imomoe::server_fixes::hostage::Update( false, 0 );
 	const auto mapStartStatus = Update( true );
 	Require( g_currentMap == "de_mirage" && !g_mapPrepared && g_manualPoints.size() == 1 &&
 		g_ownedSpawns.size() == static_cast<std::size_t>( g_actualMaxPlayers ),
@@ -1577,8 +1662,8 @@ void TestActualSameNameMapCallbacksRebuildWithoutDuplicates() {
 		"the first team round must not duplicate the already restored manual point" );
 
 	(void)Shutdown();
-	Require( imomoe::server_fixes::hostage::Shutdown(),
-		"hostage shutdown must unregister its map lifecycle listeners" );
+	Require( imomoe::server_fixes::runtime_lifecycle::Shutdown(),
+		"plugin lifecycle shutdown must unregister its map listeners" );
 	Require( g_spawnMapStartCallback == nullptr,
 		"spawn-module shutdown must unregister its map-start callback" );
 	Require( g_mapStartListeners.empty() && g_mapEndListeners.empty(),
@@ -1595,8 +1680,8 @@ void TestActualSameNameMapCallbacksRebuildWithoutDuplicates() {
 void TestDisabledModuleSameNameReloadInvalidatesTemplateQualification() {
 	using namespace imomoe::server_fixes::spawn_capacity;
 	ResetSpawnModule( "de_poseidon" );
-	Require( imomoe::server_fixes::hostage::Shutdown(), "central lifecycle begins clean" );
-	(void)imomoe::server_fixes::hostage::Update( false, 0 );
+	Require( imomoe::server_fixes::runtime_lifecycle::Shutdown(), "central lifecycle begins clean" );
+	Require( imomoe::server_fixes::runtime_lifecycle::EnsureRegistered(), "plugin map listeners must be registered" );
 	DispatchMapStart();
 	const auto source = AddNativeSource( Team::Terrorist ).handle;
 	AddNativeSource( Team::CounterTerrorist );
@@ -1604,9 +1689,9 @@ void TestDisabledModuleSameNameReloadInvalidatesTemplateQualification() {
 	Require( g_mapPrepared, "source qualification must first be established on the old map" );
 	Require( Update( false ).available && !g_mapEndRegistered,
 		"disabled A3 releases feature callbacks while the central map observer remains active" );
-	const auto oldGeneration = imomoe::server_fixes::hostage::MapGeneration();
+	const auto oldGeneration = imomoe::server_fixes::runtime_lifecycle::MapGeneration();
 	DispatchMapEnd();
-	Require( imomoe::server_fixes::hostage::MapGeneration() != oldGeneration,
+	Require( imomoe::server_fixes::runtime_lifecycle::MapGeneration() != oldGeneration,
 		"the central observer must see map end even while A3 and hostage fixes are disabled" );
 	// Model reused Rules address, map name and raw full handle in a new map.
 	FindEntity( source )->nativeValid = false;
@@ -1615,7 +1700,7 @@ void TestDisabledModuleSameNameReloadInvalidatesTemplateQualification() {
 	Require( std::none_of( g_nativePoints.begin(), g_nativePoints.end(), [source]( const SpawnPoint& point ) {
 		return point.entityHandle == source;
 	} ), "new map generations cannot inherit old geometry qualification through address/handle reuse" );
-	Require( Shutdown() && imomoe::server_fixes::hostage::Shutdown(), "both module and central callbacks must unload" );
+	Require( Shutdown() && imomoe::server_fixes::runtime_lifecycle::Shutdown(), "both module and central callbacks must unload" );
 }
 
 void ResetSpectatorModule() {
@@ -1801,6 +1886,7 @@ int main() {
 	TestPendingRetryPreservesForeignRawClientCommandVeto();
 	TestJointeamUsesGlobalPreAndFailureEventAsRetryBoundary();
 	TestAdminCommandCleanupUsesCallbackAbsencePostcondition();
+	TestPartialAdminRegistrationRemainsOwnedAfterFailedRollback();
 	for ( const auto* map : { "de_poseidon", "de_mirage", "cs_office", "workshop_arena" } ) {
 		TestNativeRefreshReadbackFollowsActualTeamAllowance( map );
 	}
@@ -1816,6 +1902,8 @@ int main() {
 	TestNativeCapacityReadbackRejectsUnregisteredSpawnEntity();
 	TestOccupiedRegisteredSpawnsKeepCapacityAcrossRoundAndRebuild();
 	TestProductionManualSaveLoadRoundTrip();
+	TestDisabledHostageDoesNotOwnFeatureListeners();
+	TestAutomaticCapacityBatchesGrowthAndShrink();
 	TestActualSameNameMapCallbacksRebuildWithoutDuplicates();
 	TestDisabledModuleSameNameReloadInvalidatesTemplateQualification();
 	TestSpectatorExternalNonIntegerAndMapGenerationOwnership();

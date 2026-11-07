@@ -13,6 +13,7 @@ import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+GENERATED_INCLUDE = ROOT / "generated-s2sdk/external/plugify/include"
 LOG_DIR: Path | None = None
 _COMMAND_INDEX = 0
 
@@ -102,12 +103,11 @@ def main() -> None:
     source = choose_sdk_source(sdk_work, args.resume_source)
     build = sdk_work / "build"
     output = sdk_work / "output"
-    generated = ROOT / "generated-s2sdk/external/plugify/include"
     plugify = source / "external/plugify/include"
     source_sdk = source / "external/sourcesdk"
     config = [
         f"-DSERVER_FIXES_PLUGIFY_INCLUDE_DIR={plugify}",
-        f"-DSERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR={generated}",
+        f"-DSERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR={GENERATED_INCLUDE}",
         f"-DSERVER_FIXES_SOURCE_SDK_PUBLIC_INCLUDE_DIR={source_sdk / 'public'}",
         f"-DSERVER_FIXES_SOURCE_SDK_BUILD_DIR={build}",
         f"-DSERVER_FIXES_SOURCE_SDK_LIBRARY_DIR={source_sdk / ('lib/win64' if target == 'windows-x64' else 'lib/linuxsteamrt64')}",

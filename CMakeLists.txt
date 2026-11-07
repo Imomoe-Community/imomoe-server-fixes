@@ -125,6 +125,7 @@ if(SERVER_FIXES_POLICY_TESTS_ONLY)
 		add_executable(server_fixes_spawn_capacity_callback_test
 			tests/spawn_capacity_callback_test.cpp
 			src/hostage_compat.cpp
+			src/runtime_lifecycle.cpp
 			"${SERVER_FIXES_PLUGIFY_INCLUDE_DIR}/polyhook/polyhook.cpp"
 			"${SERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR}/s2sdk/s2sdk.cpp"
 		)
@@ -164,6 +165,7 @@ endif()
 
 add_library(imomoe-server-fixes SHARED
 	src/plugin.cpp
+	src/runtime_lifecycle.cpp
 	src/hostage_compat.cpp
 	src/spawn_capacity.cpp
 	src/spectator_compat.cpp

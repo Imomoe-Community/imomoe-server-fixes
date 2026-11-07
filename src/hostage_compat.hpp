@@ -14,9 +14,7 @@ struct Status {
 };
 
 Status Update( bool enabled, std::uint64_t enabledConVarHandle ) noexcept;
-bool SchemaQueriesReady() noexcept;
-// The always-active loader lifecycle, independent of individual module switches.
-std::uint64_t MapGeneration() noexcept;
+void OnMapEnd() noexcept;
 bool Shutdown() noexcept;
 
 } // namespace imomoe::server_fixes::hostage

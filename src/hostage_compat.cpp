@@ -6,6 +6,7 @@
 #include "hostage_dispatch_read.hpp"
 #include "hostage_gate_patch.hpp"
 #include "hostage_policy.hpp"
+#include "runtime_lifecycle.hpp"
 
 #include <polyhook/polyhook.hpp>
 #include <s2sdk/s2sdk.hpp>
@@ -19,6 +20,7 @@
 #include <cstring>
 #include <exception>
 #include <limits>
+#include <optional>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -80,23 +82,42 @@ thread_local std::size_t g_touchDepth{};
 thread_local std::size_t g_touchOverflowDepth{};
 
 ::hostage::GatePatch g_tTargetGate;
-SchemaReadiness g_schemaReadiness;
 AttemptLedger g_attempts;
 std::vector<HookLease> g_hookLeases;
 std::unordered_set<std::int32_t> g_rescueZones;
 std::array<SlotGenerations, kMaxPlayerSlots> g_slotGenerations{};
 std::uint64_t g_generationSequence{1};
-std::uint64_t g_mapGeneration{1};
 std::uint64_t g_roundGeneration{};
+std::optional<float> g_observedRoundStart;
 bool g_initialized{};
 bool g_pluginActive{};
 bool g_moduleEnabled{};
 bool g_ctObserversActive{};
 bool g_roundActive{};
-bool g_eventListenersRegistered{};
+bool g_disconnectRegistered{};
 s2sdk::ConfigId g_gameConfig{};
 std::int32_t g_touchVTableOffset{-1};
 std::uint64_t g_enabledConVarHandle{};
+std::uint64_t g_onlyCtsConVar{};
+std::uint64_t g_gameTypeConVar{};
+std::uint64_t g_gameModeConVar{};
+
+struct SchemaOffsets {
+	std::int32_t hostageServices;
+	std::int32_t controller;
+	std::int32_t carriedHostage;
+	std::int32_t carriedProp;
+	std::int32_t isRescued;
+	std::int32_t hostageState;
+	std::int32_t mapHasRescueZone;
+	std::int32_t triggerDisabled;
+	std::int32_t roundStartTime;
+	std::int32_t roundWinStatus;
+	std::int32_t warmupPeriod;
+};
+
+SchemaOffsets g_schema{};
+bool g_ctLifecycleReady{};
 void* g_hostageRescueHandler{};
 void* g_pawnRescueDispatcher{};
 void* g_pawnRescueBody{};
@@ -153,8 +174,7 @@ std::uint64_t FindConVar( std::string_view name ) noexcept {
 	}
 }
 
-bool ReadIntConVar( std::string_view name, std::int32_t& value ) noexcept {
-	const auto handle = FindConVar( name );
+bool ReadIntConVar( std::uint64_t handle, std::int32_t& value ) noexcept {
 	if ( !handle || !__s2sdk_GetConVarValue ) {
 		return false;
 	}
@@ -168,8 +188,7 @@ bool ReadIntConVar( std::string_view name, std::int32_t& value ) noexcept {
 	}
 }
 
-bool ReadBoolConVar( std::string_view name, bool& value ) noexcept {
-	const auto handle = FindConVar( name );
+bool ReadBoolConVar( std::uint64_t handle, bool& value ) noexcept {
 	if ( !handle || !__s2sdk_GetConVarValue ) {
 		return false;
 	}
@@ -189,46 +208,33 @@ bool ReadBoolConVar( std::string_view name, bool& value ) noexcept {
 	return false;
 }
 
-bool ReadEnabledConVar() noexcept {
-	if ( !g_enabledConVarHandle || !__s2sdk_GetConVarValue ) {
-		g_moduleEnabled = false;
-		g_ctObserversActive = false;
-		return false;
+std::uint64_t CachedConVar( std::uint64_t& handle, std::string_view name ) noexcept {
+	if ( !handle ) {
+		handle = FindConVar( name );
 	}
-	try {
-		const auto text = s2sdk::GetConVarValue( g_enabledConVarHandle );
-		const std::string_view value( text.data(), text.size() );
-		if ( value == "1" || value == "true" || value == "TRUE" || value == "yes" || value == "on" ) {
-			g_moduleEnabled = true;
-			return true;
-		}
-		if ( value == "0" || value == "false" || value == "FALSE" || value == "no" || value == "off" ) {
-			g_moduleEnabled = false;
-			g_ctObserversActive = false;
-			return false;
-		}
-	} catch ( ... ) {
-	}
-	g_moduleEnabled = false;
-	g_ctObserversActive = false;
-	return false;
+	return handle;
 }
 
 bool IsSupportedCustomGame() noexcept {
 	std::int32_t gameType{};
 	std::int32_t gameMode{};
-	return ReadIntConVar( "game_type", gameType ) && ReadIntConVar( "game_mode", gameMode ) &&
+	return ReadIntConVar( CachedConVar( g_gameTypeConVar, "game_type" ), gameType ) &&
+		ReadIntConVar( CachedConVar( g_gameModeConVar, "game_mode" ), gameMode ) &&
 		gameType == 3 && gameMode == 0;
 }
 
+// Offsets are resolved once after map activation. Read the verified field
+// widths without repeating S2SDK schema-name lookups in Touch.
+template <typename T>
+T ReadSchema( const void* object, std::int32_t offset ) noexcept {
+	T value;
+	std::memcpy( &value, static_cast<const std::byte*>( object ) + offset, sizeof( value ) );
+	return value;
+}
+
 bool MapHasRescueZone() noexcept {
-	if ( !__s2sdk_GetGameRules || !__s2sdk_GetEntSchema2 ||
-		s2sdk::GetSchemaOffset( plg::string( "CCSGameRules" ), plg::string( "m_bMapHasRescueZone" ) ) < 0 ) {
-		return false;
-	}
 	void* const rules = s2sdk::GetGameRules();
-	return rules && s2sdk::GetEntSchema2( rules, plg::string( "CCSGameRules" ),
-		plg::string( "m_bMapHasRescueZone" ), 0 ) != 0;
+	return rules && ReadSchema<std::uint8_t>( rules, g_schema.mapHasRescueZone ) != 0;
 }
 
 bool EnabledRescueZone( std::int32_t handle ) noexcept {
@@ -236,38 +242,37 @@ bool EnabledRescueZone( std::int32_t handle ) noexcept {
 		return false;
 	}
 	void* const zone = EntityPointer( handle );
-	return zone && s2sdk::GetSchemaOffset( plg::string( "CBaseTrigger" ), plg::string( "m_bDisabled" ) ) >= 0 &&
-		s2sdk::GetEntSchema2( zone, plg::string( "CBaseTrigger" ), plg::string( "m_bDisabled" ), 0 ) == 0;
+	return zone && ReadSchema<std::uint8_t>( zone, g_schema.triggerDisabled ) == 0;
+}
+
+std::optional<float> ActiveRoundStart() {
+	void* const rules = s2sdk::GetGameRules();
+	if ( !rules || g_schema.roundStartTime < 0 || g_schema.roundWinStatus < 0 || g_schema.warmupPeriod < 0 ||
+		ReadSchema<std::int32_t>( rules, g_schema.roundWinStatus ) != 0 ||
+		ReadSchema<std::uint8_t>( rules, g_schema.warmupPeriod ) != 0 ) {
+		return std::nullopt;
+	}
+	const auto started = ReadSchema<float>( rules, g_schema.roundStartTime );
+	return started > 0.0f ? std::optional{ started } : std::nullopt;
 }
 
 CarriedHostage ReadCarriedHostage( std::int32_t pawnHandle ) noexcept {
 	try {
 		void* const pawn = EntityPointer( pawnHandle );
-		if ( !pawn || EntityClass( pawnHandle ) != kPlayerClass ||
-			s2sdk::GetSchemaOffset( plg::string( kPawnClass ), plg::string( "m_pHostageServices" ) ) < 0 ) {
+		if ( !pawn || EntityClass( pawnHandle ) != kPlayerClass ) {
 			return {};
 		}
-		const auto servicesValue = s2sdk::GetEntSchema2( pawn, plg::string( kPawnClass ),
-			plg::string( "m_pHostageServices" ), 0 );
-		auto* const services = reinterpret_cast<void*>( static_cast<std::uintptr_t>( servicesValue ) );
+		const auto services = ReadSchema<void*>( pawn, g_schema.hostageServices );
 		if ( !services ) {
 			return {};
 		}
-		if ( s2sdk::GetSchemaOffset( plg::string( kHostageServicesClass ), plg::string( "m_hCarriedHostage" ) ) < 0 ||
-			s2sdk::GetSchemaOffset( plg::string( kHostageServicesClass ), plg::string( "m_hCarriedHostageProp" ) ) < 0 ) {
-			return {};
-		}
-		const auto hostageHandle = s2sdk::GetEntSchemaEnt2( services,
-			plg::string( kHostageServicesClass ), plg::string( "m_hCarriedHostage" ), 0 );
-		const auto propHandle = s2sdk::GetEntSchemaEnt2( services,
-			plg::string( kHostageServicesClass ), plg::string( "m_hCarriedHostageProp" ), 0 );
+		const auto hostageHandle = ReadSchema<std::int32_t>( services, g_schema.carriedHostage );
+		const auto propHandle = ReadSchema<std::int32_t>( services, g_schema.carriedProp );
 		void* const hostage = EntityPointer( hostageHandle );
 		void* const prop = EntityPointer( propHandle );
 		if ( !hostage || !prop || EntityClass( hostageHandle ) != kHostageClass ||
-			s2sdk::GetSchemaOffset( plg::string( kHostageEntityClass ), plg::string( "m_isRescued" ) ) < 0 ||
-			s2sdk::GetSchemaOffset( plg::string( kHostageEntityClass ), plg::string( "m_nHostageState" ) ) < 0 ||
-			s2sdk::GetEntSchema2( hostage, plg::string( kHostageEntityClass ), plg::string( "m_isRescued" ), 0 ) != 0 ||
-			s2sdk::GetEntSchema2( hostage, plg::string( kHostageEntityClass ), plg::string( "m_nHostageState" ), 0 ) != 3 ||
+			ReadSchema<std::uint8_t>( hostage, g_schema.isRescued ) != 0 ||
+			ReadSchema<std::int32_t>( hostage, g_schema.hostageState ) != 3 ||
 			s2sdk::GetEntityParent( propHandle ) != pawnHandle ) {
 			return {};
 		}
@@ -293,8 +298,7 @@ bool FindPlayerForPawn( std::int32_t pawnHandle, std::int32_t& slot, std::int32_
 			}
 			const auto controller = s2sdk::PlayerSlotToEntHandle( candidate );
 			if ( !IsValidHandle( controller ) ||
-				s2sdk::GetSchemaOffset( plg::string( kPlayerPawnClass ), plg::string( "m_hController" ) ) < 0 ||
-				s2sdk::GetEntSchemaEnt2( pawn, plg::string( kPlayerPawnClass ), plg::string( "m_hController" ), 0 ) != controller ) {
+				ReadSchema<std::int32_t>( pawn, g_schema.controller ) != controller ) {
 				return false;
 			}
 			slot = candidate;
@@ -317,8 +321,7 @@ bool ReadLivePlayer( std::int32_t slot, std::int32_t expectedController, std::in
 		const auto controller = s2sdk::PlayerSlotToEntHandle( slot );
 		if ( !pawn || EntityHandle( pawn ) != expectedPawn || controller != expectedController ||
 			!IsValidHandle( controller ) || EntityClass( expectedPawn ) != kPlayerClass ||
-			s2sdk::GetSchemaOffset( plg::string( kPlayerPawnClass ), plg::string( "m_hController" ) ) < 0 ||
-			s2sdk::GetEntSchemaEnt2( pawn, plg::string( kPlayerPawnClass ), plg::string( "m_hController" ), 0 ) != controller ) {
+			ReadSchema<std::int32_t>( pawn, g_schema.controller ) != controller ) {
 			return false;
 		}
 		return !requireCt || static_cast<std::int32_t>( s2sdk::GetClientTeam( slot ) ) == 3;
@@ -331,7 +334,7 @@ bool ImportsAvailable() noexcept {
 	return __s2sdk_LoadGameConfigFile && __s2sdk_CloseGameConfigFile &&
 		__s2sdk_GetGameConfigOffset && __s2sdk_GetGameConfigSignature &&
 		__s2sdk_FindConVar && __s2sdk_GetConVarValue && __s2sdk_GetGameRules &&
-		__s2sdk_GetSchemaOffset && __s2sdk_GetEntSchema2 && __s2sdk_GetEntSchemaEnt2 &&
+		__s2sdk_GetSchemaOffset &&
 		__s2sdk_GetEntityClassname && __s2sdk_GetEntityParent &&
 		__s2sdk_IsValidEntHandle && __s2sdk_EntHandleToEntPointer &&
 		__s2sdk_EntPointerToEntHandle && __s2sdk_GetFirstActiveEntity &&
@@ -340,8 +343,7 @@ bool ImportsAvailable() noexcept {
 		__s2sdk_GetClientTeam && __s2sdk_PlayerSlotToEntHandle &&
 		__s2sdk_AcceptEntityInput && __s2sdk_HookEvent && __s2sdk_UnhookEvent &&
 		__s2sdk_GetEventPlayerSlot && __s2sdk_OnClientDisconnect_Register &&
-		__s2sdk_OnClientDisconnect_Unregister && __s2sdk_OnMapStart_Register &&
-		__s2sdk_OnMapStart_Unregister && __s2sdk_OnMapEnd_Register && __s2sdk_OnMapEnd_Unregister;
+		__s2sdk_OnClientDisconnect_Unregister;
 }
 
 bool PolyHookImportsAvailable() noexcept {
@@ -454,20 +456,27 @@ bool ResolveBuildInputs() noexcept {
 			g_initializationError = "current Touch, pawn rescue marker, or native rescue-handler gamedata is unavailable";
 			return false;
 		}
-		for ( const auto& [className, fieldName] : {
-			std::pair{ kPawnClass, std::string_view( "m_pHostageServices" ) },
-			std::pair{ kPlayerPawnClass, std::string_view( "m_hController" ) },
-			std::pair{ kHostageServicesClass, std::string_view( "m_hCarriedHostage" ) },
-			std::pair{ kHostageServicesClass, std::string_view( "m_hCarriedHostageProp" ) },
-			std::pair{ kHostageEntityClass, std::string_view( "m_isRescued" ) },
-			std::pair{ kHostageEntityClass, std::string_view( "m_nHostageState" ) },
-			std::pair{ std::string_view( "CCSGameRules" ), std::string_view( "m_bMapHasRescueZone" ) },
-			std::pair{ std::string_view( "CBaseTrigger" ), std::string_view( "m_bDisabled" ) },
-		} ) {
-			if ( s2sdk::GetSchemaOffset( plg::string( className ), plg::string( fieldName ) ) < 0 ) {
-				g_initializationError = "a required hostage/player schema field is unavailable";
-				return false;
-			}
+		const auto offset = []( std::string_view type, std::string_view field ) {
+			return s2sdk::GetSchemaOffset( plg::string( type ), plg::string( field ) );
+		};
+		g_schema = {
+			.hostageServices = offset( kPawnClass, "m_pHostageServices" ),
+			.controller = offset( kPlayerPawnClass, "m_hController" ),
+			.carriedHostage = offset( kHostageServicesClass, "m_hCarriedHostage" ),
+			.carriedProp = offset( kHostageServicesClass, "m_hCarriedHostageProp" ),
+			.isRescued = offset( kHostageEntityClass, "m_isRescued" ),
+			.hostageState = offset( kHostageEntityClass, "m_nHostageState" ),
+			.mapHasRescueZone = offset( "CCSGameRules", "m_bMapHasRescueZone" ),
+			.triggerDisabled = offset( "CBaseTrigger", "m_bDisabled" ),
+			.roundStartTime = offset( "CCSGameRules", "m_fRoundStartTime" ),
+			.roundWinStatus = offset( "CCSGameRules", "m_iRoundWinStatus" ),
+			.warmupPeriod = offset( "CCSGameRules", "m_bWarmupPeriod" ),
+		};
+		if ( g_schema.hostageServices < 0 || g_schema.controller < 0 || g_schema.carriedHostage < 0 ||
+			g_schema.carriedProp < 0 || g_schema.isRescued < 0 || g_schema.hostageState < 0 ||
+			g_schema.mapHasRescueZone < 0 || g_schema.triggerDisabled < 0 ) {
+			g_initializationError = "a required hostage/player schema field is unavailable";
+			return false;
 		}
 		g_initializationError.clear();
 		return true;
@@ -477,7 +486,6 @@ bool ResolveBuildInputs() noexcept {
 	}
 }
 
-bool EnsureEventHooks() noexcept;
 bool SyncTouchHooks() noexcept;
 bool DetachAllPolyHookCallbacks() noexcept;
 void ObserveHostageRescueHandler( polyhook::ParametersHandle parameters ) noexcept;
@@ -490,8 +498,6 @@ polyhook::ResultType PawnRescueMarkerCallback( polyhook::HookHandle, polyhook::P
 	polyhook::ReturnHandle, polyhook::CallbackType ) noexcept;
 s2sdk::ResultType GameEventCallback( const plg::string&, void*, bool ) noexcept;
 void ClientDisconnectCallback( std::int32_t, s2sdk::NetworkDisconnectionReason ) noexcept;
-void MapStartCallback() noexcept;
-void MapEndCallback() noexcept;
 
 bool EnsureCallback( void* address, polyhook::DataType returnType,
 	const std::array<polyhook::DataType, 5>& argumentTypes, std::size_t argumentCount,
@@ -790,79 +796,52 @@ bool SyncTouchHooks() noexcept {
 	}
 }
 
-bool EnsureEventHooks() noexcept {
-	if ( !__s2sdk_OnClientDisconnect_Register || !__s2sdk_OnClientDisconnect_Unregister ||
-		!__s2sdk_OnMapStart_Register || !__s2sdk_OnMapStart_Unregister ||
-		!__s2sdk_OnMapEnd_Register || !__s2sdk_OnMapEnd_Unregister ) {
-		g_ctError = "S2SDK disconnect/map lifecycle listeners unavailable";
-		return false;
-	}
-	if ( !g_eventListenersRegistered ) {
-		s2sdk::OnClientDisconnect_Register( ClientDisconnectCallback );
-		s2sdk::OnMapStart_Register( MapStartCallback );
-		s2sdk::OnMapEnd_Register( MapEndCallback );
-		g_eventListenersRegistered = true;
-	}
-	if ( std::all_of( g_events.begin(), g_events.end(), []( const EventBinding& event ) { return event.registered; } ) ) {
+bool EnsureEventHooks() {
+	if ( g_ctLifecycleReady ) {
 		return true;
 	}
-	if ( !__s2sdk_HookEvent ) {
-		g_ctError = "S2SDK game-event hooks unavailable";
-		return false;
+	if ( !g_disconnectRegistered ) {
+		s2sdk::OnClientDisconnect_Register( ClientDisconnectCallback );
+		g_disconnectRegistered = true;
 	}
-	bool success = true;
 	for ( auto& event : g_events ) {
-		if ( event.registered ) {
-			continue;
-		}
-		try {
-			if ( s2sdk::HookEvent( plg::string( event.name ), GameEventCallback, s2sdk::HookMode::Post ) ==
+		if ( !event.registered ) {
+			if ( s2sdk::HookEvent( plg::string( event.name ), GameEventCallback, s2sdk::HookMode::Post ) !=
 				s2sdk::EventHookError::Okay ) {
-				event.registered = true;
-			} else {
-				success = false;
+				g_ctError = "one or more required round/player game events could not be hooked";
+				return false;
 			}
-		} catch ( ... ) {
-			success = false;
+			event.registered = true;
 		}
 	}
-	if ( !success || !std::all_of( g_events.begin(), g_events.end(), []( const EventBinding& event ) { return event.registered; } ) ) {
-		g_ctError = "one or more required round/player game events could not be hooked";
-		return false;
+	// Preserve a submitted attempt across off/on in the same round.
+	const auto roundStart = ActiveRoundStart();
+	if ( roundStart && g_observedRoundStart && roundStart != g_observedRoundStart ) {
+		++g_roundGeneration;
+		g_attempts.Clear();
 	}
+	g_roundActive = roundStart.has_value();
+	if ( roundStart ) {
+		g_observedRoundStart = roundStart;
+	}
+	g_ctLifecycleReady = true;
 	return true;
 }
 
 bool EnsureInitialized() noexcept {
-	const bool eventsReady = EnsureEventHooks();
-	bool initialized = false;
-	const bool schemaWorkStarted = g_schemaReadiness.RunSchemaDependent( [&] {
-		if ( !ImportsAvailable() ) {
-			g_initializationError = "required S2SDK entity, schema, event, or gamedata import unavailable";
-			return;
-		}
-		if ( !PolyHookImportsAvailable() ) {
-			g_initializationError = "required PolyHook callback/detour import unavailable";
-			return;
-		}
-		if ( g_initialized ) {
-			initialized = true;
-			return;
-		}
-		if ( !LoadGameConfig() || !ResolveBuildInputs() ) {
-			return;
-		}
-		g_initialized = true;
-		if ( !eventsReady ) {
-			g_ctError = g_ctError.empty() ? "round/player lifecycle events unavailable" : g_ctError;
-		}
-		g_initializationError.clear();
-		initialized = true;
-	} );
-	if ( !schemaWorkStarted ) {
+	if ( !runtime_lifecycle::SchemaQueriesReady() ) {
 		g_initializationError = "waiting for map start before querying engine schemas";
+		return false;
 	}
-	return schemaWorkStarted && initialized;
+	if ( g_initialized ) {
+		return true;
+	}
+	if ( !ImportsAvailable() || !PolyHookImportsAvailable() ) {
+		g_initializationError = "required S2SDK or PolyHook import unavailable";
+		return false;
+	}
+	g_initialized = LoadGameConfig() && ResolveBuildInputs();
+	return g_initialized;
 }
 
 bool TouchPair( std::int32_t first, std::int32_t second, std::int32_t& zone,
@@ -901,7 +880,7 @@ bool CaptureTouchFrame( TouchFrame& frame, void* entity, void* other ) noexcept 
 	frame.zone = zone;
 	frame.slot = slot;
 	frame.key = {
-		.mapGeneration = g_mapGeneration,
+		.mapGeneration = runtime_lifecycle::MapGeneration(),
 		.roundGeneration = g_roundGeneration,
 		.connectionGeneration = g_slotGenerations[static_cast<std::size_t>( slot )].connection,
 		.lifeGeneration = g_slotGenerations[static_cast<std::size_t>( slot )].life,
@@ -922,7 +901,7 @@ void FinalizeTouchFrame( TouchFrame& frame ) noexcept {
 			!frame.nativePawnRescueCallReached || !frame.hasCarriedHostage || !g_moduleEnabled ||
 			!g_pluginActive || !g_ctObserversActive || !g_roundActive || !IsSupportedCustomGame() ||
 			!MapHasRescueZone() || frame.slot < 0 || frame.slot >= static_cast<std::int32_t>( kMaxPlayerSlots ) ||
-			g_mapGeneration != frame.key.mapGeneration || g_roundGeneration != frame.key.roundGeneration ||
+			runtime_lifecycle::MapGeneration() != frame.key.mapGeneration || g_roundGeneration != frame.key.roundGeneration ||
 			g_slotGenerations[static_cast<std::size_t>( frame.slot )].connection != frame.key.connectionGeneration ||
 			g_slotGenerations[static_cast<std::size_t>( frame.slot )].life != frame.key.lifeGeneration ||
 			!EnabledRescueZone( frame.zone ) ||
@@ -948,6 +927,10 @@ void FinalizeTouchFrame( TouchFrame& frame ) noexcept {
 			.nativeRescueHandlerWasInvoked = frame.handlerObserved,
 			.nativeRescueHandlerObservationCertain = frame.handlerObservationCertain,
 		};
+		bool enabledNow{};
+		if ( !ReadBoolConVar( g_enabledConVarHandle, enabledNow ) || !enabledNow ) {
+			return;
+		}
 		const auto action = g_attempts.Finalize( frame.key, facts );
 		if ( action != FinalizeAction::SubmitNativeInput ) {
 			return;
@@ -970,7 +953,7 @@ polyhook::ResultType TouchCallback( polyhook::HookHandle, polyhook::ParametersHa
 			return polyhook::ResultType::Ignored;
 		}
 		TouchFrame frame{};
-		if ( ReadEnabledConVar() && CanObserveRescueTouch( g_pluginActive, g_moduleEnabled, g_ctObserversActive ) ) {
+		if ( CanObserveRescueTouch( g_pluginActive, g_moduleEnabled, g_ctObserversActive ) && !g_rescueZones.empty() ) {
 			try {
 				frame.entity = polyhook::GetArgumentPointer( parameters, 0 );
 				frame.other = polyhook::GetArgumentPointer( parameters, 1 );
@@ -990,29 +973,33 @@ polyhook::ResultType TouchCallback( polyhook::HookHandle, polyhook::ParametersHa
 		if ( g_touchDepth == 0 ) {
 			return polyhook::ResultType::Ignored;
 		}
+		auto frame = g_touchFrames[--g_touchDepth];
+		if ( !frame.relevant || !g_moduleEnabled || !g_ctObserversActive ) {
+			return polyhook::ResultType::Ignored;
+		}
 		try {
 			const auto entity = polyhook::GetArgumentPointer( parameters, 0 );
 			const auto other = polyhook::GetArgumentPointer( parameters, 1 );
-			auto frame = g_touchFrames[--g_touchDepth];
-			g_touchFrames[g_touchDepth] = {};
 			if ( frame.entity == entity && frame.other == other ) {
-				if ( ReadEnabledConVar() && CanObserveRescueTouch( g_pluginActive, g_moduleEnabled, g_ctObserversActive ) ) {
-					FinalizeTouchFrame( frame );
-				}
+				FinalizeTouchFrame( frame );
 			} else {
 				g_touchDepth = 0;
-				g_touchFrames.fill( {} );
 			}
 		} catch ( ... ) {
 			g_touchDepth = 0;
-			g_touchFrames.fill( {} );
 		}
 	}
 	return polyhook::ResultType::Ignored;
 }
 
+bool HasRelevantTouchFrame() noexcept {
+	return g_pluginActive && g_moduleEnabled && g_ctObserversActive && !g_rescueZones.empty() &&
+		std::any_of( g_touchFrames.begin(), g_touchFrames.begin() + static_cast<std::ptrdiff_t>( g_touchDepth ),
+			[]( const TouchFrame& frame ) { return frame.relevant && frame.hasCarriedHostage; } );
+}
+
 void ObserveHostageRescueHandler( polyhook::ParametersHandle parameters ) noexcept {
-	if ( !g_pluginActive || !g_ctObserversActive || !ReadEnabledConVar() || g_touchDepth == 0 ) {
+	if ( !HasRelevantTouchFrame() ) {
 		return;
 	}
 	const auto markUncertain = [] {
@@ -1049,7 +1036,7 @@ void ObserveHostageRescueHandler( polyhook::ParametersHandle parameters ) noexce
 }
 
 void ObservePawnRescueMarker( polyhook::ParametersHandle parameters ) noexcept {
-	if ( !g_pluginActive || !g_ctObserversActive || !ReadEnabledConVar() || g_touchDepth == 0 ) {
+	if ( !HasRelevantTouchFrame() ) {
 		return;
 	}
 	if ( !parameters ) {
@@ -1135,7 +1122,7 @@ void BumpConnectionGeneration( std::int32_t slot ) noexcept {
 }
 
 s2sdk::ResultType GameEventCallback( const plg::string& name, void* event, bool ) noexcept {
-	if ( !g_pluginActive ) {
+	if ( !g_moduleEnabled || !g_ctLifecycleReady ) {
 		return s2sdk::ResultType::Continue;
 	}
 	try {
@@ -1143,6 +1130,7 @@ s2sdk::ResultType GameEventCallback( const plg::string& name, void* event, bool 
 		if ( eventName == "round_start" ) {
 			++g_roundGeneration;
 			g_roundActive = true;
+			g_observedRoundStart = ActiveRoundStart();
 			g_attempts.Clear();
 			if ( g_moduleEnabled ) {
 				(void)SyncTouchHooks();
@@ -1150,6 +1138,7 @@ s2sdk::ResultType GameEventCallback( const plg::string& name, void* event, bool 
 		} else if ( eventName == "round_end" ) {
 			++g_roundGeneration;
 			g_roundActive = false;
+			g_observedRoundStart.reset();
 			g_attempts.Clear();
 		} else if ( eventName == "player_spawn" || eventName == "player_death" ) {
 			BumpLifeGeneration( SlotFromEvent( event ) );
@@ -1161,29 +1150,8 @@ s2sdk::ResultType GameEventCallback( const plg::string& name, void* event, bool 
 }
 
 void ClientDisconnectCallback( std::int32_t slot, s2sdk::NetworkDisconnectionReason ) noexcept {
-	if ( g_pluginActive ) {
+	if ( g_moduleEnabled && g_ctLifecycleReady ) {
 		BumpConnectionGeneration( slot );
-	}
-}
-
-void MapStartCallback() noexcept {
-	if ( g_pluginActive ) {
-		g_schemaReadiness.OnMapStart();
-	}
-}
-
-void MapEndCallback() noexcept {
-	if ( !g_pluginActive ) {
-		return;
-	}
-	++g_mapGeneration;
-	++g_roundGeneration;
-	g_roundActive = false;
-	g_schemaReadiness.OnMapEnd();
-	g_attempts.Clear();
-	g_rescueZones.clear();
-	if ( !DetachTouchCallbacks() ) {
-		g_ctError = "Touch callback removal pending after map end";
 	}
 }
 
@@ -1207,34 +1175,28 @@ bool UnregisterEventHooks() noexcept {
 	return success;
 }
 
-bool UnregisterEventListeners() noexcept {
-	if ( !g_eventListenersRegistered ) {
+bool UnregisterDisconnect() noexcept {
+	if ( !g_disconnectRegistered ) {
 		return true;
 	}
-	if ( __s2sdk_OnClientDisconnect_Unregister ) {
-		s2sdk::OnClientDisconnect_Unregister( ClientDisconnectCallback );
+	try {
+		if ( __s2sdk_OnClientDisconnect_Unregister ) {
+			s2sdk::OnClientDisconnect_Unregister( ClientDisconnectCallback );
+			g_disconnectRegistered = false;
+			return true;
+		}
+	} catch ( ... ) {
 	}
-	if ( __s2sdk_OnMapStart_Unregister ) {
-		s2sdk::OnMapStart_Unregister( MapStartCallback );
-	}
-	if ( __s2sdk_OnMapEnd_Unregister ) {
-		s2sdk::OnMapEnd_Unregister( MapEndCallback );
-	}
-	g_eventListenersRegistered = false;
-	return __s2sdk_OnClientDisconnect_Unregister && __s2sdk_OnMapStart_Unregister &&
-		__s2sdk_OnMapEnd_Unregister;
+	return false;
 }
 
-bool UpdateTTargetGate( bool enabled ) noexcept {
+bool UpdateTTargetGate( bool enabled, bool mpOnlyKnown, bool mpOnlyCts ) noexcept {
 	g_tTargetGate.game_thread_seen();
-	bool mpOnlyKnown{};
-	bool mpOnlyCts{};
-	mpOnlyKnown = ReadBoolConVar( "mp_only_cts_rescue_hostages", mpOnlyCts );
 	const bool desired = ShouldPatchTTargetGateWhenPolicyUnknown( enabled, mpOnlyKnown, mpOnlyCts );
 	if ( !desired ) {
 		if ( g_tTargetGate.active() ) {
 			try {
-				(void)g_tTargetGate.disable();
+				g_tTargetGate.disable();
 			} catch ( const std::exception& error ) {
 				g_tGateError = error.what();
 				return false;
@@ -1255,7 +1217,7 @@ bool UpdateTTargetGate( bool enabled ) noexcept {
 		return true;
 	}
 	try {
-		(void)g_tTargetGate.enable();
+		g_tTargetGate.enable();
 		g_tGateError.clear();
 		return true;
 	} catch ( const std::exception& error ) {
@@ -1266,21 +1228,26 @@ bool UpdateTTargetGate( bool enabled ) noexcept {
 	return false;
 }
 
-bool UpdateCtObservers( bool enabled ) noexcept {
+bool UpdateCtObservers( bool enabled ) {
+	g_ctObserversActive = false;
 	if ( !enabled ) {
-		g_ctObserversActive = false;
-		const bool clean = DetachAllPolyHookCallbacks();
-		g_ctError = clean ? "disabled by configuration" : "Touch/rescue observer removal pending";
+		g_touchDepth = g_touchOverflowDepth = 0;
+		g_ctLifecycleReady = false;
+		g_roundActive = false;
 		g_rescueZones.clear();
 		g_lastTouchSync = {};
+		const bool callbacksClean = DetachAllPolyHookCallbacks();
+		const bool eventsClean = UnregisterEventHooks();
+		const bool disconnectClean = UnregisterDisconnect();
+		const bool clean = callbacksClean && eventsClean && disconnectClean;
+		g_ctError = clean ? "disabled by configuration" : "hostage observer or event removal pending";
 		return clean;
 	}
-	g_ctObserversActive = false;
-	if ( !g_initialized || !g_pluginActive || !g_eventListenersRegistered ||
-		!std::all_of( g_events.begin(), g_events.end(), []( const EventBinding& event ) { return event.registered; } ) ) {
-		if ( !g_ctError.size() ) {
-			g_ctError = g_initializationError;
-		}
+	if ( !EnsureInitialized() ) {
+		g_ctError = g_initializationError;
+		return false;
+	}
+	if ( !EnsureEventHooks() ) {
 		return false;
 	}
 	if ( !AttachHandlerObservers() ) {
@@ -1324,26 +1291,15 @@ Status Update( bool enabled, std::uint64_t enabledConVarHandle ) noexcept {
 	g_enabledConVarHandle = enabledConVarHandle;
 	g_moduleEnabled = enabled;
 	try {
-		const bool tUpdated = UpdateTTargetGate( enabled );
-		const bool initialized = EnsureInitialized();
-		if ( !initialized ) {
-			g_ctObserversActive = false;
-			(void)DetachAllPolyHookCallbacks();
-			g_ctError = g_initializationError;
-		}
-		const bool ctUpdated = initialized && UpdateCtObservers( enabled );
 		bool mpOnlyCts{};
-		const bool mpOnlyAvailable = ReadBoolConVar( "mp_only_cts_rescue_hostages", mpOnlyCts );
-		const bool tAvailable = g_tTargetGate.supports_current_build() && g_tTargetGate.code_recognized() &&
+		const bool mpOnlyAvailable = enabled &&
+			ReadBoolConVar( CachedConVar( g_onlyCtsConVar, "mp_only_cts_rescue_hostages" ), mpOnlyCts );
+		const bool tUpdated = UpdateTTargetGate( enabled, mpOnlyAvailable, mpOnlyCts );
+		const bool ctUpdated = UpdateCtObservers( enabled );
+		const bool tAvailable = g_tTargetGate.code_recognized() &&
 			( !enabled || ( mpOnlyAvailable && ( mpOnlyCts || g_tTargetGate.active() ) ) );
-		const bool ctAvailable = g_initialized && g_eventListenersRegistered &&
-			std::all_of( g_events.begin(), g_events.end(), []( const EventBinding& event ) { return event.registered; } ) &&
-		g_touchVTableOffset >= 0 && g_hostageRescueHandler && g_pawnRescueMarker &&
-		g_pawnRescueBody && PolyHookImportsAvailable() &&
-			(g_ctError.empty() || g_ctError == "disabled by configuration" ||
-				g_ctError == "no enabled func_hostage_rescue on this map" ||
-				g_ctError == "m_bMapHasRescueZone is false" ||
-				g_ctError == "CT fallback is restricted to game_type=3 game_mode=0");
+		const bool ctAvailable = enabled ? g_ctObserversActive : g_initialized;
+
 		return { ( tUpdated && tAvailable ) || ( ctUpdated && ctAvailable ),
 			CurrentStatusReason( enabled, tUpdated && tAvailable, ctUpdated && ctAvailable ) };
 	} catch ( ... ) {
@@ -1352,29 +1308,38 @@ Status Update( bool enabled, std::uint64_t enabledConVarHandle ) noexcept {
 	}
 }
 
-std::uint64_t MapGeneration() noexcept {
-	return g_mapGeneration;
-}
-
-bool SchemaQueriesReady() noexcept {
-	return g_schemaReadiness.CanQuery();
+void OnMapEnd() noexcept {
+	g_touchDepth = g_touchOverflowDepth = 0;
+	g_ctLifecycleReady = false;
+	g_ctObserversActive = false;
+	++g_roundGeneration;
+	g_roundActive = false;
+	g_observedRoundStart.reset();
+	g_attempts.Clear();
+	g_rescueZones.clear();
+	g_lastTouchSync = {};
+	g_tTargetGate.invalidate_module();
+	if ( !DetachTouchCallbacks() ) {
+		g_ctError = "Touch callback removal pending after map end";
+	}
 }
 
 bool Shutdown() noexcept {
+	g_touchDepth = g_touchOverflowDepth = 0;
 	g_pluginActive = false;
 	g_moduleEnabled = false;
 	g_ctObserversActive = false;
 	bool gateClean = true;
 	if ( g_tTargetGate.active() ) {
 		try {
-			(void)g_tTargetGate.disable();
+			g_tTargetGate.disable();
 		} catch ( ... ) {
 			gateClean = false;
 		}
 	}
 	const bool callbacksClean = DetachAllPolyHookCallbacks();
 	const bool eventsClean = UnregisterEventHooks();
-	const bool listenersClean = UnregisterEventListeners();
+	const bool listenersClean = UnregisterDisconnect();
 	if ( !gateClean || !callbacksClean || !eventsClean || !listenersClean ) {
 		g_ctError = "hostage compatibility callbacks or target gate remain pending cleanup";
 		return false;
@@ -1386,7 +1351,11 @@ bool Shutdown() noexcept {
 	g_initialized = false;
 	g_enabledConVarHandle = 0;
 	g_roundActive = false;
-	g_schemaReadiness.OnMapEnd();
+	g_observedRoundStart.reset();
+	g_ctLifecycleReady = false;
+	g_lastTouchSync = {};
+	g_tTargetGate.invalidate_module();
+	g_onlyCtsConVar = g_gameTypeConVar = g_gameModeConVar = 0;
 	g_attempts.Clear();
 	g_rescueZones.clear();
 	return true;

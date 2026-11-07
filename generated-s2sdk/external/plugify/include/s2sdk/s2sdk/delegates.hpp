@@ -26,6 +26,10 @@ namespace s2sdk {
   using OnBuildGameSessionManifestCallback = void (*)();
 
 
+  // Called on every map start.
+  using OnMapStartCallback = void (*)();
+
+
   // Called on every map end.
   using OnMapEndCallback = void (*)();
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "hostage_policy.hpp"
+#include "runtime_lifecycle.hpp"
 #include "hostage_dispatch_read.hpp"
 
 #include <array>
@@ -34,7 +35,7 @@ RescueFacts LegalFacts() {
 } // namespace
 
 int main() {
-	SchemaReadiness schemaReadiness;
+	imomoe::server_fixes::runtime_lifecycle::SchemaReadiness schemaReadiness;
 	int schemaQueries{};
 	Check( !schemaReadiness.CanQuery() && !schemaReadiness.RunSchemaDependent( [&] { ++schemaQueries; } ) &&
 		schemaQueries == 0, "schema access and its work are blocked before the first map lifecycle callback" );
@@ -65,7 +66,7 @@ int main() {
 		"a detoured pawn body with an inner Pre Supercede is uncertain, so its reached callsite cannot trigger fallback" );
 	Check( ledger.Size() == 0, "inner body Supercede submits no rescue input" );
 
-	std::array<std::byte, 16> dispatchArgument{};
+	alignas( std::uintptr_t ) std::array<std::byte, 16> dispatchArgument{};
 	std::int32_t dispatchHandle = 0x71234567;
 	void* handleStorage = &dispatchHandle;
 	std::memcpy( dispatchArgument.data() + 8, &handleStorage, sizeof( handleStorage ) );
@@ -73,11 +74,11 @@ int main() {
 	Check( ReadHostageDispatchTarget( dispatchArgument.data(), decodedHandle ) && decodedHandle == dispatchHandle,
 		"the checked dispatch reader copies a readable full entity handle" );
 	Check( !ReadHostageDispatchTarget( reinterpret_cast<const void*>( std::uintptr_t{ 1 } ), decodedHandle ),
-		"an unreadable non-null dispatch argument is uncertain rather than a crashing dereference" );
+		"a dispatch argument below the user address range is rejected" );
 	void* unreadableHandleStorage = reinterpret_cast<void*>( std::uintptr_t{ 1 } );
 	std::memcpy( dispatchArgument.data() + 8, &unreadableHandleStorage, sizeof( unreadableHandleStorage ) );
 	Check( !ReadHostageDispatchTarget( dispatchArgument.data(), decodedHandle ),
-		"an unreadable nested handle pointer is uncertain" );
+		"a nested pointer below the user address range is rejected" );
 	Check( IsMatchingHostageTarget( Key(), 80 ), "the Hostage API target handle matches this carried hostage" );
 	Check( !IsMatchingHostageTarget( Key(), 81 ) && !IsMatchingHostageTarget( Key(), -1 ),
 		"a different or invalid target cannot suppress this hostage's missing-dispatch fallback" );

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/Mai-Ooizumi/plugify-plugin-s2sdk/c21cd032e0dd459a5f057b25d21473c29f6acff2/schemas/gamedata.schema.json",
+  "$schema": "https://raw.githubusercontent.com/Mai-Ooizumi/plugify-plugin-s2sdk/196bb40362e04685c507bb953ebe367ddb9429df/schemas/gamedata.schema.json",
   "csgo": {
     "Signatures": {
       // Build 26445667. SpawnPoint::Spawn calls this with itself to register.

@@ -9,26 +9,6 @@
 
 namespace imomoe::server_fixes::hostage {
 
-class SchemaReadiness final {
-public:
-	// GetSchemaOffset is unsafe until S2SDK's post-ActivateServer map-start callback.
-	void OnMapStart() noexcept { ready_ = true; }
-	void OnMapEnd() noexcept { ready_ = false; }
-	bool CanQuery() const noexcept { return ready_; }
-
-	template <typename Action>
-	bool RunSchemaDependent( Action&& action ) const {
-		if ( !ready_ ) {
-			return false;
-		}
-		action();
-		return true;
-	}
-
-private:
-	bool ready_{};
-};
-
 struct AttemptKey {
 	std::uint64_t mapGeneration{};
 	std::uint64_t roundGeneration{};

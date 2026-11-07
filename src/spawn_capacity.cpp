@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "spawn_capacity.hpp"
-#include "hostage_compat.hpp"
+#include "runtime_lifecycle.hpp"
 
 #include "spawn_capacity_policy.hpp"
 #include "spawn_capacity_storage.hpp"
@@ -26,6 +26,7 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -85,6 +86,7 @@ struct OwnedSpawn {
 	bool nativeEligibleBeforeRemoval{};
 	bool nativeExclusionVerified{};
 	bool removalRequested{};
+	bool batchRetirementPending{};
 	std::int64_t enabledBeforeRemoval{ -1 };
 	std::int32_t nativePointsBeforeRemoval{};
 	plg::vec3 validatedOrigin{};
@@ -145,7 +147,6 @@ void* g_nativeSpawnEligibility{};
 std::array<std::int32_t, 2> g_spawnListOffsets{ -1, -1 };
 bool g_enabled{};
 bool g_mapPrepared{};
-bool g_adminCommandsRegistered{};
 bool g_joinPreRegistered{};
 bool g_joinFailedRegistered{};
 bool g_roundPrestartRegistered{};
@@ -1265,42 +1266,21 @@ void PruneRemovedSpawns() noexcept {
 
 bool HasPendingOwnedRemoval( Team team ) noexcept {
 	return std::any_of( g_ownedSpawns.begin(), g_ownedSpawns.end(), [team]( const OwnedSpawn& spawn ) {
-		return spawn.team == team && ( spawn.disabledForRemoval || spawn.removalRequested ) &&
-			!spawn.nativeExclusionVerified && IsCompleteHandle( spawn.handle );
+		return spawn.team == team && IsCompleteHandle( spawn.handle ) &&
+			( ( spawn.batchRetirementPending && !spawn.removalRequested ) ||
+				( spawn.disabledForRemoval && !spawn.nativeExclusionVerified ) );
 	} );
 }
 
-bool CreateSpawnEntity( const SpawnPoint& point, bool automatic, std::string& error ) noexcept {
+bool StageSpawnEntity( const SpawnPoint& point, bool automatic, std::int32_t& handle, std::string& error ) noexcept {
 	if ( !IsValidPoint( point ) ) {
 		error = "spawn point values are invalid";
 		return false;
 	}
-	if ( !ResolveNativeSpawnRecount( error ) ) {
-		return false;
-	}
-	if ( !__s2sdk_GetGameRules ) {
-		error = "S2SDK GetGameRules import is unavailable for native spawn-list refresh";
-		return false;
-	}
-	try {
-		if ( !s2sdk::GetGameRules() ) {
-			error = "current GameRules instance is unavailable for native spawn-list refresh";
-			return false;
-		}
-	} catch ( ... ) {
-		error = "could not read the current GameRules instance for native spawn-list refresh";
-		return false;
-	}
-	std::array<NativeTeamCapacity, 2> beforeCapacities{};
-	if ( !ReadNativeTeamCapacities( beforeCapacities, error ) ) {
-		return false;
-	}
-	const auto beforeSpawnPoints = beforeCapacities[TeamIndex( point.team )].spawnPoints;
 	const bool hasTemplate = HasRegisteredTemplate( point, error );
 	if ( !error.empty() ) {
 		return false;
 	}
-	std::int32_t handle = -1;
 	const auto cleanupCreation = [&]() noexcept {
 		try {
 			auto owned = std::find_if( g_ownedSpawns.begin(), g_ownedSpawns.end(), [handle]( const OwnedSpawn& spawn ) {
@@ -1310,8 +1290,14 @@ bool CreateSpawnEntity( const SpawnPoint& point, bool automatic, std::string& er
 			if ( IsCompleteHandle( handle ) ) {
 				const bool removed = owned != g_ownedSpawns.end() ? RequestOwnedRemoval( *owned, cleanupError ) :
 					RemoveSpawnHandle( handle, point.team, cleanupError );
-				if ( !removed && !cleanupError.empty() ) {
-					error += "; cleanup: " + cleanupError;
+				if ( !removed ) {
+					if ( automatic && owned != g_ownedSpawns.end() ) {
+						owned->batchRetirementPending = true;
+						g_capacityReconcilePending = true;
+					}
+					if ( !cleanupError.empty() ) {
+						error += "; cleanup: " + cleanupError;
+					}
 				}
 			} else if ( IsValidHandle( handle ) ) {
 				// This raw full handle came from this creation, not a delayed task. The SDK can
@@ -1338,9 +1324,6 @@ bool CreateSpawnEntity( const SpawnPoint& point, bool automatic, std::string& er
 		}
 		g_ownedSpawns.push_back( { .handle = handle, .manualId = automatic ? 0u : point.id,
 			.team = point.team, .automatic = automatic } );
-		auto owned = std::find_if( g_ownedSpawns.begin(), g_ownedSpawns.end(), [handle]( const OwnedSpawn& spawn ) {
-			return spawn.handle == handle;
-		} );
 		plg::vector<plg::string> keys;
 		keys.push_back( plg::string( "origin" ) );
 		keys.push_back( plg::string( "angles" ) );
@@ -1357,12 +1340,7 @@ bool CreateSpawnEntity( const SpawnPoint& point, bool automatic, std::string& er
 		if ( View( actualClass ) != ClassnameFor( point.team ) ||
 			!SamePosition( s2sdk::GetEntityAbsOrigin( handle ), point.origin ) ) {
 			error = "spawn entity did not retain its team class or requested origin";
-			if ( owned != g_ownedSpawns.end() ) {
-				std::string cleanupError;
-				if ( !RequestOwnedRemoval( *owned, cleanupError ) && !cleanupError.empty() ) {
-					error += "; cleanup: " + cleanupError;
-				}
-			}
+			cleanupCreation();
 			return false;
 		}
 		// Reusing an accepted template stays valid when players occupy its position.
@@ -1374,38 +1352,11 @@ bool CreateSpawnEntity( const SpawnPoint& point, bool automatic, std::string& er
 			cleanupCreation();
 			return false;
 		}
-		if ( !RecountNativeSpawnLists( error ) ) {
-			if ( owned != g_ownedSpawns.end() ) {
-				std::string cleanupError;
-				if ( !RequestOwnedRemoval( *owned, cleanupError ) && !cleanupError.empty() ) {
-					error += "; cleanup: " + cleanupError;
-				}
-			}
-			return false;
-		}
-		std::array<NativeTeamCapacity, 2> afterCapacities{};
-		if ( !ReadNativeTeamCapacities( afterCapacities, error ) ) {
-			if ( owned != g_ownedSpawns.end() ) {
-				std::string cleanupError;
-				if ( !RequestOwnedRemoval( *owned, cleanupError ) && !cleanupError.empty() ) {
-					error += "; cleanup: " + cleanupError;
-				}
-			}
-			return false;
-		}
-		if ( afterCapacities[TeamIndex( point.team )].spawnPoints <= beforeSpawnPoints ) {
-			error = "native spawn-list refresh did not register the new valid team spawn point";
-			if ( owned != g_ownedSpawns.end() ) {
-				std::string cleanupError;
-				if ( !RequestOwnedRemoval( *owned, cleanupError ) && !cleanupError.empty() ) {
-					error += "; cleanup: " + cleanupError;
-				}
-			}
-			return false;
-		}
+		const auto owned = std::find_if( g_ownedSpawns.begin(), g_ownedSpawns.end(), [handle]( const OwnedSpawn& spawn ) {
+			return spawn.handle == handle;
+		} );
 		if ( owned != g_ownedSpawns.end() ) {
 			owned->validatedOrigin = point.origin;
-			owned->locationValidated = true;
 		}
 		return true;
 	} catch ( const std::exception& exception ) {
@@ -1469,7 +1420,7 @@ bool HasRegisteredTemplate( const SpawnPoint& point, std::string& error ) noexce
 		}
 		for ( const auto& owned : g_ownedSpawns ) {
 			if ( owned.team == point.team && owned.locationValidated &&
-				SamePosition( owned.validatedOrigin, point.origin ) && !owned.disabledForRemoval && !owned.removalRequested &&
+				SamePosition( owned.validatedOrigin, point.origin ) && !owned.batchRetirementPending && !owned.disabledForRemoval && !owned.removalRequested &&
 				NativeSpawnRegistered( owned.handle, owned.team, error ) &&
 				SamePosition( s2sdk::GetEntityAbsOrigin( owned.handle ), point.origin ) ) {
 				return true;
@@ -1498,7 +1449,7 @@ std::int32_t CountPoints( const std::vector<SpawnPoint>& points, Team team ) noe
 }
 
 bool IsActiveOwnedSpawn( const OwnedSpawn& spawn ) noexcept {
-	return !spawn.disabledForRemoval && !spawn.removalRequested && IsCompleteHandle( spawn.handle );
+	return !spawn.batchRetirementPending && !spawn.disabledForRemoval && !spawn.removalRequested && IsCompleteHandle( spawn.handle );
 }
 
 std::int32_t CountOwned( Team team, bool automatic ) noexcept {
@@ -1525,70 +1476,159 @@ bool RemoveOwnedRecord( std::vector<OwnedSpawn>::iterator record ) noexcept {
 	return true;
 }
 
-bool RemoveAllOwned() noexcept {
-	if ( g_ownedSpawns.empty() ) {
-		return true;
+bool RemoveOwnedBatch( std::span<OwnedSpawn* const> spawns, std::string& error,
+	const std::array<NativeTeamCapacity, 2>* freshBaseline = nullptr ) noexcept {
+	if ( std::any_of( spawns.begin(), spawns.end(), []( const OwnedSpawn* spawn ) {
+		return IsCompleteHandle( spawn->handle ) && !spawn->disabledForRemoval;
+	} ) ) {
+		std::array<NativeTeamCapacity, 2> before{};
+		if ( freshBaseline ) {
+			before = *freshBaseline;
+		} else if ( !RecountNativeSpawnLists( error ) || !ReadNativeTeamCapacities( before, error ) ) {
+			return false;
+		}
+		for ( auto* spawn : spawns ) {
+			if ( spawn->disabledForRemoval ) {
+				continue;
+			}
+			if ( !DisableOwnedSpawnForRemoval( *spawn, before, error ) ) {
+				return false;
+			}
+			// Each registered point must reduce the count, not merely share the
+			// first point's threshold. The per-record threshold survives retries.
+			if ( spawn->disabledForRemoval && spawn->nativeEligibleBeforeRemoval ) {
+				--before[TeamIndex( spawn->team )].spawnPoints;
+			}
+		}
 	}
+	if ( std::any_of( spawns.begin(), spawns.end(), []( const OwnedSpawn* spawn ) {
+		return IsCompleteHandle( spawn->handle ) && spawn->disabledForRemoval && !spawn->nativeExclusionVerified;
+	} ) ) {
+		std::array<NativeTeamCapacity, 2> after{};
+		if ( !RecountNativeSpawnLists( error ) || !ReadNativeTeamCapacities( after, error ) ) {
+			return false;
+		}
+		for ( auto* spawn : spawns ) {
+			if ( spawn->disabledForRemoval && !spawn->nativeExclusionVerified &&
+				!VerifyOwnedSpawnExcluded( *spawn, after, error ) ) {
+				return false;
+			}
+		}
+		g_nativeRefreshPending = false;
+	}
+	bool removed = true;
+	for ( auto* spawn : spawns ) {
+		removed = RequestEngineOwnedRemoval( *spawn, error ) && removed;
+	}
+	return removed;
+}
+
+bool RemoveAllOwned() noexcept {
 	try {
-		const bool needsDisable = std::any_of( g_ownedSpawns.begin(), g_ownedSpawns.end(), []( const OwnedSpawn& spawn ) {
-			return IsCompleteHandle( spawn.handle ) && !spawn.disabledForRemoval;
-		} );
-		if ( needsDisable ) {
-			std::string error;
-			if ( !RecountNativeSpawnLists( error ) ) {
-				g_mapReason = std::move( error );
-				return false;
-			}
-			std::array<NativeTeamCapacity, 2> before{};
-			if ( !ReadNativeTeamCapacities( before, error ) ) {
-				g_mapReason = std::move( error );
-				return false;
-			}
-			for ( auto& spawn : g_ownedSpawns ) {
-				if ( !DisableOwnedSpawnForRemoval( spawn, before, error ) ) {
-					g_mapReason = std::move( error );
-					return false;
-				}
-			}
-		}
-		const bool needsExclusionRefresh = std::any_of( g_ownedSpawns.begin(), g_ownedSpawns.end(), []( const OwnedSpawn& spawn ) {
-			return IsCompleteHandle( spawn.handle ) && spawn.disabledForRemoval && !spawn.nativeExclusionVerified;
-		} );
-		if ( needsExclusionRefresh ) {
-			std::string error;
-			if ( !RecountNativeSpawnLists( error ) ) {
-				g_mapReason = std::move( error );
-				return false;
-			}
-			std::array<NativeTeamCapacity, 2> after{};
-			if ( !ReadNativeTeamCapacities( after, error ) ) {
-				g_mapReason = std::move( error );
-				return false;
-			}
-			for ( auto& spawn : g_ownedSpawns ) {
-				if ( spawn.disabledForRemoval && !VerifyOwnedSpawnExcluded( spawn, after, error ) ) {
-					g_mapReason = std::move( error );
-					return false;
-				}
-			}
-			g_nativeRefreshPending = false;
-		}
-		bool removed = true;
-		std::string error;
+		std::vector<OwnedSpawn*> spawns;
+		spawns.reserve( g_ownedSpawns.size() );
 		for ( auto& spawn : g_ownedSpawns ) {
-			removed = RequestEngineOwnedRemoval( spawn, error ) && removed;
+			spawns.push_back( &spawn );
 		}
+		std::string error;
+		const bool removed = RemoveOwnedBatch( spawns, error );
 		if ( !removed && !error.empty() ) {
 			g_mapReason = std::move( error );
 		}
 		PruneRemovedSpawns();
 		return removed;
-	} catch ( const std::exception& exception ) {
-		g_mapReason = std::string( "owned spawn cleanup failed: " ) + exception.what();
 	} catch ( ... ) {
 		g_mapReason = "owned spawn cleanup failed";
+		return false;
 	}
-	return false;
+}
+
+bool FinishSpawnCreation( Team team, std::span<const std::int32_t> created,
+	std::array<NativeTeamCapacity, 2>& capacities, std::string& error ) {
+	if ( created.empty() ) {
+		return true;
+	}
+	const auto index = TeamIndex( team );
+	const auto before = capacities[index].spawnPoints;
+	const bool refreshed = RecountNativeSpawnLists( error ) && ReadNativeTeamCapacities( capacities, error );
+	std::vector<OwnedSpawn*> rejected;
+	std::size_t registeredCount{};
+	for ( const auto handle : created ) {
+		const auto spawn = std::find_if( g_ownedSpawns.begin(), g_ownedSpawns.end(), [handle]( const OwnedSpawn& candidate ) {
+			return candidate.handle == handle;
+		} );
+		std::string registrationError;
+		if ( refreshed && spawn != g_ownedSpawns.end() && NativeSpawnRegistered( handle, team, registrationError ) ) {
+			spawn->locationValidated = true;
+			++registeredCount;
+			continue;
+		}
+		if ( spawn != g_ownedSpawns.end() ) {
+			rejected.push_back( &*spawn );
+		}
+		if ( error.empty() ) {
+			error = registrationError.empty() ? "native spawn-list refresh did not register a new team spawn point" :
+				std::move( registrationError );
+		}
+	}
+	if ( refreshed && capacities[index].spawnPoints - before < static_cast<std::int32_t>( registeredCount ) ) {
+		if ( error.empty() ) {
+			error = "native spawn-list refresh did not increase team spawn capacity";
+		}
+		rejected.clear();
+		for ( auto& spawn : g_ownedSpawns ) {
+			if ( std::find( created.begin(), created.end(), spawn.handle ) != created.end() ) {
+				spawn.locationValidated = false;
+				rejected.push_back( &spawn );
+			}
+		}
+	}
+	if ( !rejected.empty() ) {
+		for ( auto* spawn : rejected ) {
+			spawn->batchRetirementPending = true;
+		}
+		std::string cleanupError;
+		if ( !RemoveOwnedBatch( rejected, cleanupError, refreshed ? &capacities : nullptr ) ) {
+			g_capacityReconcilePending = true;
+			error += "; cleanup: " + cleanupError;
+		}
+	}
+	return error.empty();
+}
+
+bool CreateSpawnEntity( const SpawnPoint& point, bool automatic, std::string& error ) noexcept {
+	if ( !IsValidPoint( point ) ) {
+		error = "spawn point values are invalid";
+		return false;
+	}
+	if ( !ResolveNativeSpawnRecount( error ) ) {
+		return false;
+	}
+	if ( !__s2sdk_GetGameRules ) {
+		error = "S2SDK GetGameRules import is unavailable for native spawn-list refresh";
+		return false;
+	}
+	try {
+		if ( !s2sdk::GetGameRules() ) {
+			error = "current GameRules instance is unavailable for native spawn-list refresh";
+			return false;
+		}
+	} catch ( ... ) {
+		error = "could not read the current GameRules instance for native spawn-list refresh";
+		return false;
+	}
+	std::array<NativeTeamCapacity, 2> beforeCapacities{};
+	if ( !ReadNativeTeamCapacities( beforeCapacities, error ) ) {
+		return false;
+	}
+	try {
+		std::int32_t handle = -1;
+		return StageSpawnEntity( point, automatic, handle, error ) &&
+			FinishSpawnCreation( point.team, std::span( &handle, 1 ), beforeCapacities, error );
+	} catch ( ... ) {
+		error = "verifying newly created spawn failed";
+		return false;
+	}
 }
 
 std::vector<SpawnPoint> ValidNativeSourcesForTeam( Team team, std::string& error ) {
@@ -1701,55 +1741,64 @@ bool ReconcileAutomaticCapacity( std::string& error ) noexcept {
 				return false;
 			}
 			const auto targetEffective = maxPlayers;
-			auto nativeAndManual = capacities[index].spawnPoints - CountOwned( team, true );
+			auto automaticCount = CountOwned( team, true );
+			const auto nativeAndManual = capacities[index].spawnPoints - automaticCount;
 			if ( nativeAndManual < 0 ) {
 				error = "native spawn count is smaller than the registered ServerFixes-owned points";
 				return false;
 			}
 			const auto targetAutomatic = AdditionalPointsNeeded( targetEffective, nativeAndManual, 0 );
-			auto excess = CountOwned( team, true ) - targetAutomatic;
-			if ( excess > 0 ) {
-				for ( auto iterator = g_ownedSpawns.rbegin(); iterator != g_ownedSpawns.rend() && excess > 0; ++iterator ) {
-					if ( iterator->team == team && iterator->automatic && IsActiveOwnedSpawn( *iterator ) ) {
-						if ( !RequestOwnedRemoval( *iterator, error ) ) {
-							if ( error.empty() ) {
-								error = "could not request removal of an excess capacity spawn";
-							}
-							return false;
-						}
-						--excess;
+			if ( automaticCount > targetAutomatic ) {
+				std::vector<OwnedSpawn*> excess;
+				excess.reserve( static_cast<std::size_t>( automaticCount - targetAutomatic ) );
+				for ( auto it = g_ownedSpawns.rbegin(); it != g_ownedSpawns.rend() && automaticCount > targetAutomatic; ++it ) {
+					if ( it->team == team && it->automatic && IsActiveOwnedSpawn( *it ) ) {
+						it->batchRetirementPending = true;
+						excess.push_back( &*it );
+						--automaticCount;
 					}
 				}
+				if ( !RemoveOwnedBatch( excess, error, &capacities ) ) {
+					g_capacityReconcilePending = true;
+					return false;
+				}
 				PruneRemovedSpawns();
-				if ( CountOwned( team, true ) > targetAutomatic ) {
+				if ( !ReadNativeTeamCapacities( capacities, error ) ) {
+					return false;
+				}
+			}
+			if ( automaticCount < targetAutomatic ) {
+				if ( HasPendingOwnedRemoval( team ) ) {
 					g_capacityReconcilePending = true;
 					error = "automatic capacity adjustment is waiting for owned spawn removal";
 					return false;
 				}
-				if ( !RecountNativeSpawnLists( error ) || !ReadNativeTeamCapacities( capacities, error ) ) {
+				const auto sources = SourcesForTeam( team, error );
+				if ( sources.empty() ) {
+					if ( !error.empty() ) return false;
+					if ( !missingSources.empty() ) missingSources += "; ";
+					missingSources += std::string( team == Team::Terrorist ? "T" : "CT" ) +
+						" has no valid native or saved manual spawn source; add a point with sf_spawn_add";
+					continue;
+				}
+				std::vector<std::int32_t> created;
+				created.reserve( static_cast<std::size_t>( targetAutomatic - automaticCount ) );
+				std::string creationError;
+				for ( ; automaticCount < targetAutomatic; ++automaticCount ) {
+					SpawnPoint point = sources[static_cast<std::size_t>( automaticCount ) % sources.size()];
+					point.id = 1;
+					std::int32_t handle = -1;
+					if ( !StageSpawnEntity( point, true, handle, creationError ) ) {
+						break;
+					}
+					created.push_back( handle );
+				}
+				const bool finished = FinishSpawnCreation( team, created, capacities, error );
+				if ( !creationError.empty() ) {
+					error = finished ? std::move( creationError ) : creationError + "; " + error;
 					return false;
 				}
-			}
-			const auto sources = SourcesForTeam( team, error );
-			if ( CountOwned( team, true ) < targetAutomatic && HasPendingOwnedRemoval( team ) ) {
-				g_capacityReconcilePending = true;
-				error = "automatic capacity adjustment is waiting for owned spawn removal";
-				return false;
-			}
-			if ( CountOwned( team, true ) < targetAutomatic && sources.empty() ) {
-				if ( !error.empty() ) return false;
-				if ( !missingSources.empty() ) missingSources += "; ";
-				missingSources += std::string( team == Team::Terrorist ? "T" : "CT" ) +
-					" has no valid native or saved manual spawn source; add a point with sf_spawn_add";
-				continue;
-			}
-			while ( CountOwned( team, true ) < targetAutomatic ) {
-				SpawnPoint point = sources[static_cast<std::size_t>( CountOwned( team, true ) ) % sources.size()];
-				point.id = 1;
-				if ( !CreateSpawnEntity( point, true, error ) ) {
-					return false;
-				}
-				if ( !ReadNativeTeamCapacities( capacities, error ) ) {
+				if ( !finished ) {
 					return false;
 				}
 			}
@@ -1776,7 +1825,8 @@ bool ReconcileAutomaticCapacity( std::string& error ) noexcept {
 	}
 }
 
-void SetReadyMapReason() noexcept {
+std::string ReadyMapReason() {
+	std::string reason;
 	try {
 		std::string sourceError;
 		const auto tNativeSources = ValidNativeSourcesForTeam( Team::Terrorist, sourceError ).size();
@@ -1784,31 +1834,27 @@ void SetReadyMapReason() noexcept {
 		const auto tSources = tNativeSources + static_cast<std::size_t>( CountPoints( g_manualPoints, Team::Terrorist ) );
 		const auto ctSources = ctNativeSources +
 			static_cast<std::size_t>( CountPoints( g_manualPoints, Team::CounterTerrorist ) );
-		if ( !g_capacityReadbackAvailable ) {
-			g_mapReason = "native team spawn capacity has not been read back";
-			g_mapPrepared = false;
-			return;
-		}
-		g_mapReason = ( tSources == 0 || ctSources == 0 ) ?
+		reason = ( tSources == 0 || ctSources == 0 ) ?
 			"ready; add a manual point for the team without a native spawn source" :
 			( tNativeSources == 0 || ctNativeSources == 0 ?
 				"ready; native/manual effective team capacity" : "ready; native effective team capacity" );
-		g_mapReason += " T=" +
+		reason += " T=" +
 			std::to_string( g_effectiveTeamCapacities[0].effective ) + " CT=" +
 			std::to_string( g_effectiveTeamCapacities[1].effective ) + " / maxplayers=" +
 			std::to_string( g_capacityMaxClients );
 		if ( g_teamMaximumYielded[0] ) {
-			g_mapReason += "; T max-team capacity has an external owner";
+			reason += "; T max-team capacity has an external owner";
 		}
 		if ( g_teamMaximumYielded[1] ) {
-			g_mapReason += "; CT max-team capacity has an external owner";
+			reason += "; CT max-team capacity has an external owner";
 		}
 		if ( g_manualPointsDirty ) {
-			g_mapReason += "; manual point edits are not saved";
+			reason += "; manual point edits are not saved";
 		}
 	} catch ( ... ) {
-		g_mapReason = "ready; status text allocation failed";
+		return "ready; status text allocation failed";
 	}
+	return reason;
 }
 
 void SpawnMapEntities() noexcept {
@@ -1832,7 +1878,6 @@ void SpawnMapEntities() noexcept {
 		return;
 	}
 	g_mapPrepared = true;
-	SetReadyMapReason();
 }
 
 void CompleteMapLoad() noexcept {
@@ -1903,11 +1948,11 @@ void LoadMap( std::string map ) noexcept {
 	// across a new map/Rules instance. Full handles and positions are rechecked.
 	void* const sourceRules = s2sdk::GetGameRules();
 	if ( map != g_currentMap || sourceRules != g_nativeSourceRules ||
-		g_nativeSourceMapGeneration != hostage::MapGeneration() ) {
+		g_nativeSourceMapGeneration != runtime_lifecycle::MapGeneration() ) {
 		g_nativePoints.clear();
 	}
 	g_nativeSourceRules = sourceRules;
-	g_nativeSourceMapGeneration = hostage::MapGeneration();
+	g_nativeSourceMapGeneration = runtime_lifecycle::MapGeneration();
 	g_currentMap = std::move( map );
 	g_manualPoints.clear();
 	g_nextManualId = 1;
@@ -2126,75 +2171,41 @@ void ProcessPendingRetries() noexcept {
 	}
 }
 
-bool CommandExists( std::string_view name ) noexcept {
-	try {
-		for ( const auto& existing : s2sdk::GetAllConCommands( s2sdk::ConVarFlag::None ) ) {
-			if ( EqualsAsciiCaseInsensitive( View( existing ), name ) ) {
-				return true;
-			}
+bool CommandExists( std::string_view name ) {
+	for ( const auto& existing : s2sdk::GetAllConCommands( s2sdk::ConVarFlag::None ) ) {
+		if ( EqualsAsciiCaseInsensitive( View( existing ), name ) ) {
+			return true;
 		}
-	} catch ( ... ) {
 	}
 	return false;
 }
 
-bool RegisterAdminCommands( std::string& error ) noexcept {
-	if ( g_adminCommandsRegistered ) {
-		return true;
-	}
-	try {
-		const std::array<std::pair<std::string_view, s2sdk::ConCommandCallback>, 4> commands{{
-			{ kSpawnAddCommand, OnSpawnAddCommand },
-			{ kSpawnListCommand, OnSpawnListCommand },
-			{ kSpawnRemoveCommand, OnSpawnRemoveCommand },
-			{ kSpawnSaveCommand, OnSpawnSaveCommand },
-		}};
-		std::vector<std::pair<std::string_view, s2sdk::ConCommandCallback>> added;
-		for ( const auto& [name, callback] : commands ) {
-			if ( CommandExists( name ) ) {
-				error = "console command already exists: " + std::string( name );
-				break;
-			}
-			const auto registered = s2sdk::AddConsoleCommand( plg::string( name ),
-				plg::string( "Manage this map's ServerFixes-owned spawn points" ), s2sdk::ConVarFlag::None,
-				callback, s2sdk::HookMode::Pre );
-			if ( !registered || !s2sdk::HasConsoleCommandCallbacks( plg::string( name ) ) ) {
-				error = "could not register console command: " + std::string( name );
-				break;
-			}
-			added.emplace_back( name, callback );
-		}
-		if ( !error.empty() ) {
-			for ( const auto& [name, callback] : added ) {
-				(void)s2sdk::RemoveCommand( plg::string( name ), callback );
-			}
-			return false;
-		}
-		g_adminCommandsRegistered = true;
-		return true;
-	} catch ( ... ) {
-		error = "spawn administration command registration threw";
-		return false;
-	}
-}
+struct AdminCommand {
+	std::string_view name;
+	s2sdk::ConCommandCallback callback;
+	bool owned{};
+};
+
+std::array<AdminCommand, 4> g_adminCommands{{
+	{ kSpawnAddCommand, OnSpawnAddCommand },
+	{ kSpawnListCommand, OnSpawnListCommand },
+	{ kSpawnRemoveCommand, OnSpawnRemoveCommand },
+	{ kSpawnSaveCommand, OnSpawnSaveCommand },
+}};
+bool g_adminRegistrationComplete{};
 
 bool UnregisterAdminCommands( std::string& error ) noexcept {
+	g_adminRegistrationComplete = false;
 	error.clear();
-	if ( !g_adminCommandsRegistered ) {
-		return true;
-	}
 	bool clean = true;
-	const std::array<std::pair<std::string_view, s2sdk::ConCommandCallback>, 4> commands{{
-		{ kSpawnAddCommand, OnSpawnAddCommand },
-		{ kSpawnListCommand, OnSpawnListCommand },
-		{ kSpawnRemoveCommand, OnSpawnRemoveCommand },
-		{ kSpawnSaveCommand, OnSpawnSaveCommand },
-	}};
-	for ( const auto& [name, callback] : commands ) {
+	for ( auto& [name, callback, owned] : g_adminCommands ) {
+		if ( !owned ) {
+			continue;
+		}
 		bool removed = false;
 		bool removalThrew = false;
 		try {
-			removed = s2sdk::RemoveCommand( plg::string( name ), callback );
+			removed = __s2sdk_RemoveCommand && s2sdk::RemoveCommand( plg::string( name ), callback );
 		} catch ( ... ) {
 			removalThrew = true;
 		}
@@ -2202,11 +2213,14 @@ bool UnregisterAdminCommands( std::string& error ) noexcept {
 		bool stillPresent = true;
 		bool presenceKnown = false;
 		try {
-			stillPresent = s2sdk::HasConsoleCommandCallbacks( plg::string( name ) );
-			presenceKnown = true;
+			if ( __s2sdk_HasConsoleCommandCallbacks ) {
+				stillPresent = s2sdk::HasConsoleCommandCallbacks( plg::string( name ) );
+				presenceKnown = true;
+			}
 		} catch ( ... ) {
 		}
 		if ( presenceKnown && !stillPresent ) {
+			owned = false;
 			continue;
 		}
 
@@ -2222,10 +2236,43 @@ bool UnregisterAdminCommands( std::string& error ) noexcept {
 			}
 		}
 	}
-	if ( clean ) {
-		g_adminCommandsRegistered = false;
-	}
 	return clean;
+}
+
+bool RegisterAdminCommands( std::string& error ) noexcept {
+	if ( g_adminRegistrationComplete ) {
+		return true;
+	}
+	if ( !UnregisterAdminCommands( error ) ) {
+		return false;
+	}
+	try {
+		for ( auto& [name, callback, owned] : g_adminCommands ) {
+			if ( CommandExists( name ) ) {
+				error = "console command already exists: " + std::string( name );
+				break;
+			}
+			const plg::string commandName( name );
+			const plg::string description( "Manage this map's ServerFixes-owned spawn points" );
+			owned = true; // Add can fail or throw after installing a callback.
+			if ( !s2sdk::AddConsoleCommand( commandName, description, s2sdk::ConVarFlag::None,
+				callback, s2sdk::HookMode::Pre ) || !s2sdk::HasConsoleCommandCallbacks( commandName ) ) {
+				error = "could not register console command: " + std::string( name );
+				break;
+			}
+		}
+	} catch ( ... ) {
+		error = "spawn administration command registration threw";
+	}
+	if ( error.empty() ) {
+		g_adminRegistrationComplete = true;
+		return true;
+	}
+	std::string cleanupError;
+	if ( !UnregisterAdminCommands( cleanupError ) ) {
+		error += "; " + cleanupError;
+	}
+	return false;
 }
 
 bool ParseManualPointId( std::string_view text, std::uint32_t& id ) noexcept {
@@ -2311,7 +2358,6 @@ s2sdk::ResultType OnSpawnAddCommand( std::int32_t slot, s2sdk::ConCommandContext
 				"; capacity adjustment is pending: " + error + "; use sf_spawn_save to persist it" );
 		} else {
 			g_mapPrepared = true;
-			SetReadyMapReason();
 			Reply( slot, context, "[ServerFixes] added manual point " + std::to_string( point.id ) +
 				" for " + std::string( point.team == Team::Terrorist ? "T" : "CT" ) +
 				"; use sf_spawn_save to persist it" );
@@ -2379,7 +2425,6 @@ s2sdk::ResultType OnSpawnRemoveCommand( std::int32_t slot, s2sdk::ConCommandCont
 		} );
 		if ( owned != g_ownedSpawns.end() && !RemoveOwnedRecord( owned ) ) {
 			g_manualPoints.push_back( removedPoint );
-			SetReadyMapReason();
 			Reply( slot, context, "[ServerFixes] could not request removal of manual point " + std::to_string( id ) );
 			return s2sdk::ResultType::Handled;
 		}
@@ -2396,7 +2441,6 @@ s2sdk::ResultType OnSpawnRemoveCommand( std::int32_t slot, s2sdk::ConCommandCont
 		}
 		if ( error.empty() ) {
 			g_mapPrepared = true;
-			SetReadyMapReason();
 			Reply( slot, context, "[ServerFixes] removed manual point " + std::to_string( id ) +
 				"; use sf_spawn_save to persist the change" );
 		} else {
@@ -2426,7 +2470,6 @@ s2sdk::ResultType OnSpawnSaveCommand( std::int32_t slot, s2sdk::ConCommandContex
 			return s2sdk::ResultType::Handled;
 		}
 		g_manualPointsDirty = false;
-		SetReadyMapReason();
 		Reply( slot, context, "[ServerFixes] saved " + std::to_string( g_manualPoints.size() ) +
 			" manual point(s) for " + g_currentMap );
 	} catch ( ... ) {
@@ -2595,7 +2638,6 @@ void ReconcileSpawnEntitiesAfterRound() noexcept {
 			return;
 		}
 		g_mapPrepared = true;
-		SetReadyMapReason();
 	} catch ( const std::exception& exception ) {
 		g_mapPrepared = false;
 		g_mapReason = std::string( "round spawn reconciliation failed: " ) + exception.what();
@@ -2682,7 +2724,7 @@ void SetModuleReason( std::string reason ) noexcept {
 
 } // namespace
 
-Status Update( bool enabled ) noexcept {
+Status Update( bool enabled, bool includeDiagnostics ) noexcept {
 	try {
 		if ( !enabled ) {
 			g_enabled = false;
@@ -2692,6 +2734,8 @@ Status Update( bool enabled ) noexcept {
 			InvalidateJoinRequests( false );
 			std::fill( g_retryDispatchActive.begin(), g_retryDispatchActive.end(), false );
 			const bool hooksClean = UnregisterRuntimeHooks();
+			std::string commandCleanupError;
+			const bool commandsClean = UnregisterAdminCommands( commandCleanupError );
 			const bool spawnsRequested = RemoveAllOwned();
 			std::string teamRestoreError;
 			const bool teamMaximumsRestored = RestoreTeamMaximums( teamRestoreError );
@@ -2700,11 +2744,12 @@ Status Update( bool enabled ) noexcept {
 			g_mapLoadAttempted = false;
 			g_mapDataLoaded = false;
 			g_mapLifecycle.CompleteMapRebuild();
-			if ( !hooksClean || !spawnsRequested || !teamMaximumsRestored || !configClosed ) {
+			if ( !hooksClean || !commandsClean || !spawnsRequested || !teamMaximumsRestored || !configClosed ) {
 				if ( !teamRestoreError.empty() ) {
 					g_mapReason = teamRestoreError;
 				}
-				SetModuleReason( "disabled; runtime hook or owned spawn cleanup needs retry" );
+				SetModuleReason( commandsClean ? "disabled; runtime hook or owned spawn cleanup needs retry" :
+					"disabled; " + commandCleanupError );
 				return { false, g_moduleReason };
 			}
 			ResetTeamMaximumCycle();
@@ -2718,6 +2763,8 @@ Status Update( bool enabled ) noexcept {
 			g_mapPrepared = false;
 			InvalidateJoinRequests( false );
 			(void)UnregisterRuntimeHooks();
+			std::string commandCleanupError;
+			const bool commandsClean = UnregisterAdminCommands( commandCleanupError );
 			const bool spawnsRemoved = RemoveAllOwned();
 			std::string teamRestoreError;
 			const bool teamMaximumsRestored = RestoreTeamMaximums( teamRestoreError );
@@ -2727,7 +2774,8 @@ Status Update( bool enabled ) noexcept {
 			}
 			g_mapLoadAttempted = false;
 			g_mapDataLoaded = false;
-			SetModuleReason( "required S2SDK import unavailable" );
+			SetModuleReason( commandsClean ? "required S2SDK import unavailable" :
+				"required S2SDK import unavailable; " + commandCleanupError );
 			return { false, g_moduleReason };
 		}
 
@@ -2740,13 +2788,17 @@ Status Update( bool enabled ) noexcept {
 		}
 
 		std::string registrationError;
-		if ( !RegisterAdminCommands( registrationError ) || !RegisterRuntimeHooks( registrationError ) ) {
+		const bool commandsRegistered = RegisterAdminCommands( registrationError );
+		if ( !commandsRegistered || !RegisterRuntimeHooks( registrationError ) ) {
 			g_enabled = false;
 			g_mapPrepared = false;
 			InvalidateJoinRequests( false );
 			const bool hooksClean = UnregisterRuntimeHooks();
 			std::string commandCleanupError;
-			const bool commandsClean = UnregisterAdminCommands( commandCleanupError );
+			const bool commandsClean = commandsRegistered ? UnregisterAdminCommands( commandCleanupError ) :
+				std::none_of( g_adminCommands.begin(), g_adminCommands.end(), []( const AdminCommand& command ) {
+					return command.owned;
+				} );
 			const bool spawnsClean = RemoveAllOwned();
 			std::string teamRestoreError;
 			const bool teamMaximumsRestored = RestoreTeamMaximums( teamRestoreError );
@@ -2790,11 +2842,25 @@ Status Update( bool enabled ) noexcept {
 					g_mapReason = std::move( error );
 				} else {
 					g_mapPrepared = true;
-					SetReadyMapReason();
 				}
 			}
 		}
 
+		if ( g_capacityReconcilePending && !g_rebuildPending && !g_mapLifecycle.mapEndPending ) {
+			std::vector<OwnedSpawn*> retiring;
+			for ( auto& spawn : g_ownedSpawns ) {
+				if ( spawn.batchRetirementPending && !spawn.removalRequested ) {
+					retiring.push_back( &spawn );
+				}
+			}
+			if ( !retiring.empty() ) {
+				std::string error;
+				if ( !RemoveOwnedBatch( retiring, error ) ) {
+					g_mapReason = std::move( error );
+				}
+				PruneRemovedSpawns();
+			}
+		}
 		const bool removalPending = HasPendingOwnedRemoval( Team::Terrorist ) ||
 			HasPendingOwnedRemoval( Team::CounterTerrorist );
 		if ( g_capacityReconcilePending && !removalPending && g_enabled && g_mapDataLoaded &&
@@ -2806,7 +2872,6 @@ Status Update( bool enabled ) noexcept {
 				g_mapReason = std::move( error );
 			} else {
 				g_mapPrepared = true;
-				SetReadyMapReason();
 			}
 		}
 		if ( g_capacityReadbackAvailable && g_mapDataLoaded &&
@@ -2824,17 +2889,15 @@ Status Update( bool enabled ) noexcept {
 					!HasPendingOwnedRemoval( Team::CounterTerrorist ) ) {
 					g_mapPrepared = true;
 				}
-				if ( g_mapPrepared ) {
-					SetReadyMapReason();
-				}
 			}
 		}
 		ProcessPendingRetries();
 
-		const bool available = g_mapPrepared;
-		SetModuleReason( available ? "enabled; " + g_mapReason :
-			( g_mapReason.empty() ? "map spawn capacity is not ready" : g_mapReason ) );
-		return { available, g_moduleReason };
+		if ( g_mapPrepared ) {
+			return { true, includeDiagnostics ? "enabled; " + ReadyMapReason() : "enabled" };
+		}
+		SetModuleReason( g_mapReason.empty() ? "map spawn capacity is not ready" : g_mapReason );
+		return { false, g_moduleReason };
 	} catch ( const std::exception& exception ) {
 		SetModuleReason( std::string( "spawn capacity update failed: " ) + exception.what() );
 		return { false, g_moduleReason };

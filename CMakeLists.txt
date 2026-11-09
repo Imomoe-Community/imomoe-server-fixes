@@ -122,30 +122,30 @@ if(SERVER_FIXES_POLICY_TESTS_ONLY)
 		if(NOT SERVER_FIXES_TIER0_LIBRARY)
 			message(FATAL_ERROR "The matching SourceSDK library directory must contain tier0.lib or libtier0.so for CCommand")
 		endif()
-		add_executable(server_fixes_spawn_capacity_callback_test
-			tests/spawn_capacity_callback_test.cpp
-			src/hostage_compat.cpp
-			src/runtime_lifecycle.cpp
-			"${SERVER_FIXES_PLUGIFY_INCLUDE_DIR}/polyhook/polyhook.cpp"
-			"${SERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR}/s2sdk/s2sdk.cpp"
-		)
 		set(callback_test_include "${CMAKE_CURRENT_BINARY_DIR}/callback-test-include")
 		file(MAKE_DIRECTORY "${callback_test_include}")
 		file(WRITE "${callback_test_include}/plugin_export.h" "#pragma once\n#define PLUGIN_API\n")
-		target_include_directories(server_fixes_spawn_capacity_callback_test PRIVATE
-			src
-			"${callback_test_include}"
-			"${SERVER_FIXES_PLUGIFY_INCLUDE_DIR}"
-			"${SERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR}"
-		)
-		server_fixes_apply_paired_sourcesdk(server_fixes_spawn_capacity_callback_test)
-		target_compile_features(server_fixes_spawn_capacity_callback_test PRIVATE cxx_std_23)
-		if(MSVC)
-			target_compile_options(server_fixes_spawn_capacity_callback_test PRIVATE /W4 /WX /EHsc /Zc:preprocessor)
-		else()
-			target_compile_options(server_fixes_spawn_capacity_callback_test PRIVATE -Wall -Wextra -Wconversion -Wshadow -Werror)
-		endif()
-		add_test(NAME server_fixes_spawn_capacity_callbacks COMMAND server_fixes_spawn_capacity_callback_test)
+
+		function(server_fixes_add_callback_test target test_name)
+			add_executable(${target} ${ARGN}
+				"${SERVER_FIXES_PLUGIFY_INCLUDE_DIR}/polyhook/polyhook.cpp"
+				"${SERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR}/s2sdk/s2sdk.cpp"
+			)
+			target_include_directories(${target} PRIVATE src "${callback_test_include}"
+				"${SERVER_FIXES_PLUGIFY_INCLUDE_DIR}" "${SERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR}")
+			server_fixes_apply_paired_sourcesdk(${target})
+			target_compile_features(${target} PRIVATE cxx_std_23)
+			if(MSVC)
+				target_compile_options(${target} PRIVATE /W4 /WX /EHsc /Zc:preprocessor)
+			else()
+				target_compile_options(${target} PRIVATE -Wall -Wextra -Wconversion -Wshadow -Werror)
+			endif()
+			add_test(NAME ${test_name} COMMAND ${target})
+		endfunction()
+
+		server_fixes_add_callback_test(server_fixes_spawn_capacity_callback_test server_fixes_spawn_capacity_callbacks
+			tests/spawn_capacity_callback_test.cpp src/hostage_compat.cpp src/runtime_lifecycle.cpp)
+		server_fixes_add_callback_test(server_fixes_game_ban_fix_callback_test server_fixes_game_ban_fix_callbacks tests/game_ban_fix_callback_test.cpp)
 	endif()
 	return()
 endif()
@@ -165,6 +165,7 @@ endif()
 
 add_library(imomoe-server-fixes SHARED
 	src/plugin.cpp
+	src/game_ban_fix.cpp
 	src/runtime_lifecycle.cpp
 	src/hostage_compat.cpp
 	src/spawn_capacity.cpp

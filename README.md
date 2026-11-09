@@ -10,18 +10,19 @@
 
 ### 功能概览
 
-插件包含四个可独立开关的模块：
+各模块可独立开关：
 
 | 模块标识 | 控制 ConVar | 默认值 | 功能说明 |
 | --- | --- | --- | --- |
 | `chat_admission` | `sf_chat_admission` | `1` | **聊天准入拦截**：拦截尚未完全进入游戏（未达到 `InGame` 状态）的真实客户端槽位发送的 `say`、`say_team` 及 SDK 聊天别名指令；RCON、服务端命令、非聊天命令和已正常进服的玩家不受影响。触发拦截时仅在日志记录槽位号与规范命令名。 |
 | `hostage_compat` | `sf_hostage_compat` | `1` | **人质救援与背负兼容**：<br>1. **CT 救援触发补偿**：当存活的 CT 背负人质触碰救援区（`CBaseEntity::Touch`）且已到达 pawn 救援派发点，但原生 `CHostage_API::OnRescueZoneTouch` 未被触发时，在核验地图、回合、存活状态、救援区及实体句柄后，自动补发一次原生 `OnRescueZoneTouch` 输入。资金奖励、事件广播与回合结算仍由引擎原生逻辑负责。<br>2. **T 阵营背起人质**：仅当 `mp_only_cts_rescue_hostages` 明确为 `0` (`false`) 时，修改原生人质交互目标选择器的阵营判断以允许 T 背起人质；为 `1` 或未知时保持原生仅限 CT 的行为。关闭模块时会安全还原补丁，且不会打断 T 正在背负的人质。 |
 | `spawn_capacity` | `sf_spawn_capacity` | `1` | **出生点容量扩展**：所有地图都会自动补齐 T、CT 双方的出生点，使每队可容纳服务器的 `maxplayers` 人；较低的原生队伍人数上限也会相应提高。玩家因出生点不足而加队失败时，补点后会重试一次。支持手动添加和保存出生点。 |
-| `spectator_compat` | `sf_spectator_compat` | `1` | **观察者容量同步**：自动将 `mp_spectators_max` 与 `CCSGameRules::m_iSpectatorSlotCount` 对齐至服务器实际 `GetMaxClients()`（`maxplayers`）。若运行期间有其他插件或管理员主动修改了某项数值，本模块会在当前启用周期内自动让出该属性的控制权，并在禁用、换图或卸载时仅还原仍由本插件持有的数值。 |
+| `spectator_compat` | `sf_spectator_compat` | `1` | **观察者容量同步**：自动将 `mp_spectators_max` 与 `CCSGameRules::m_iSpectatorSlotCount` 对齐至服务器实际 `GetMaxClients()`（`maxplayers`）。运行中手动修改 `mp_spectators_max` 后，GameRules 改为跟随该值（包括 `0`），换图后继续生效；将 `sf_spectator_compat` 设为 `0` 再设回 `1` 可恢复自动模式。若其他插件直接将 GameRules 改为不同值，本模块会在本次启用周期内停止同步该字段。关闭、换图或卸载时只还原仍由本插件持有的值。 |
+| `game_ban_fix` | `sf_game_ban_fix` | `0` | **游戏封禁残留修复**：核对当前连接的 Steam 认证身份，防止旧控制器状态触发误踢；清理已过期的 GC 封禁，保留有效封禁和通信状态。 |
 
 #### 与 FunRounds 的职责桥接
 
-插件导出了 `GetOwnedFixes()` 接口并固定返回掩码 `3`（bit 0 代表 `chat_admission`，bit 1 代表 `hostage_compat`），用于通知支持所有权桥接的 `FunRounds` 由本插件接管这两项功能（返回值不随模块开关或运行期可用性变化）。`spawn_capacity` 与 `spectator_compat` 则是本插件新增的独立能力，不占用 `FunRounds` 掩码位。
+插件导出了 `GetOwnedFixes()` 接口并固定返回掩码 `3`（bit 0 代表 `chat_admission`，bit 1 代表 `hostage_compat`），用于通知支持所有权桥接的 `FunRounds` 由本插件接管这两项功能（返回值不随模块开关或运行期可用性变化）。其他模块独立运行，不占用 `FunRounds` 掩码位。
 
 > **注意**：与 `FunRounds` 混用时，请确保所安装的 `FunRounds` 构建包含 `GetOwnedFixes()` 桥接逻辑。旧版不含桥接的 `0.6.0` 二进制不可与本插件混装（仅凭版本号相同不足以判断兼容性）。
 
@@ -36,6 +37,7 @@
    sf_hostage_compat 1
    sf_spawn_capacity 1
    sf_spectator_compat 1
+   sf_game_ban_fix 0
    ```
 3. 在 `game/csgo/cfg/server.cfg` 中添加加载项：
    ```cfg
@@ -58,13 +60,25 @@ python tools/migrate_config.py <path-to-funrounds.toml> --output configs/imomoe_
 
 #### 1. 查看模块运行状态
 
-在控制台执行 `sf_status` 可实时查看四个模块的启用状态（`enabled`）、运行期可用性（`available`）及具体原因（`reason`）：
+在控制台执行 `sf_status` 可实时查看各模块的启用状态（`enabled`）、运行期可用性（`available`）及具体原因（`reason`）：
 
 ```text
 sf_status
 ```
 
 > 对于 `hostage_compat`，`sf_status` 会在 `reason` 中分别报告 CT 救援补偿路径与 T 背负补丁路径的可用性；只要其中任意一条路径可用，`available` 即为 `1`。
+
+#### 游戏封禁残留修复
+
+在隔离服用 `sf_game_ban_fix 1` 启用，然后用 `sf_status` 确认 `game_ban_fix available=1`。目前支持 Windows/Linux 的 CS2 Build 26445667。不要与其他 GameBanFix/steam_ban detour 同时启用。签名、构建或 Hook 不匹配时仅停用本模块；修正环境后切换 `0` → `1` 重试。
+
+插件不改写 `sv_kick_players_with_cooldown`。值为 `0` 时保留引擎自身的安全服回退规则；低于 `2` 时仅在本次检查中屏蔽竞技冷却原因 `20`、`22`、`23`；值为 `2` 时由引擎处理所有原生可执行的冷却。有效的 GC 封禁保留到过期，以便封禁账号重连时仍会被原生逻辑拒绝。服务端 `banid` 列表与持久化文件不由本模块修改。
+
+Windows 和 Linux 各在隔离服验证一次：
+
+1. `sv_kick_players_with_cooldown 1`：有效游戏封禁仍触发原生拒绝；只有竞技冷却的账号和正常账号可加入。检查失败连接、连续进服和换图后重连，确认正常账号不会触发 `STEAM_ID_PENDING` 封禁循环。
+2. 切到 `2`：竞技冷却账号仍按原生配置被拒绝；切到 `0`：与同一安全模式下关闭模块的原生行为比较。确认管理员封禁仍生效。
+3. 切换功能开关、重载插件并换图，确认没有重复 Hook。在单独的隔离服副本中移除 GameBanFix 的签名，确认 `sf_status` 显示其不可用，其他模块和服务端继续工作。
 
 #### 自动扩容的工作方式
 
@@ -106,7 +120,7 @@ python -m unittest discover -s tools/tests -p "test_*.py"
 
 编译完整插件需要支持 C++23 的编译器，并使用 [依赖说明 (docs/DEPENDENCIES.md)](docs/DEPENDENCIES.md) 中固定的依赖版本与配对构建目录：
 
-- **绑定与清单契约**：请使用配对 S2SDK 的 Plugify 头文件以及本仓库检入的 `generated-s2sdk/` 导出头。`bindings/s2sdk.pplugin` 是在 159 方法 / 6 原型清单的基础上，额外声明了 S2SDK 3.3.0 已实现的 `OnMapStart_Register` 与 `OnMapStart_Unregister`（共 161 方法 / 7 原型）。请勿使用 S2SDK 仓库根目录的 `plugify-plugin-s2sdk.pplugin.in` 模板重新生成。
+- **绑定与清单契约**：请使用配对 S2SDK 的 Plugify 头文件以及本仓库检入的 `generated-s2sdk/` 导出头。`bindings/s2sdk.pplugin` 是在 159 方法 / 6 原型清单的基础上，额外声明了 S2SDK 3.3.1 已实现的 `OnMapStart_Register` 与 `OnMapStart_Unregister`（共 161 方法 / 7 原型）。请勿使用 S2SDK 仓库根目录的 `plugify-plugin-s2sdk.pplugin.in` 模板重新生成。
 - **配对 SourceSDK 与 `tier0` 链接**：加队重试逻辑使用了 S2SDK 固定子模块（`f3de33c58595c628c12b4ffaba76dfcd49b8763f`）中的强类型 `IServerGameClients::ClientCommand` 与 `CCommand`。构建时需提供同一 S2SDK 工作树下的 `public` 头文件目录与已构建的 `build` 目录（包含 `<build>/external/sourcesdk/protos` 生成的 Protobuf 头文件以及提供 `CCommand` 实现的静态库 `tier0_perproject`）。
   - **Windows** 链接 `build/external/sourcesdk/Release/tier0_perproject.lib` 与 `source/external/sourcesdk/lib/win64/tier0.lib`（运行时由 CS2 从 `game/bin/win64/tier0.dll` 提供）。
   - **Steam Runtime Linux** 使用 Sniper GCC 14 工具链，链接 `build/external/sourcesdk/libtier0_perproject.a` 与 `source/external/sourcesdk/lib/linuxsteamrt64/libtier0.so`（运行时由 CS2 从 `game/bin/linuxsteamrt64/libtier0.so` 提供）。
@@ -168,14 +182,15 @@ cmake --build build --config Release
 
 ### What It Owns
 
-The plugin provides four independently toggleable modules:
+Each module can be toggled independently:
 
 | Module | ConVar | Default | Description |
 | --- | --- | --- | --- |
 | `chat_admission` | `sf_chat_admission` | `1` | **Chat Admission**: Blocks `say`, `say_team`, and the SDK Chat alias path for real client slots that are not yet `InGame`. Server/RCON commands, non-chat commands, and fully connected players pass through unchanged. Logs record only the slot number and canonical command label. |
 | `hostage_compat` | `sf_hostage_compat` | `1` | **Hostage Compatibility**:<br>1. **CT Rescue Compensation**: Observes `CBaseEntity::Touch`, a build-guarded mid-hook immediately before the dispatcher's direct pawn-rescue call, and the native `CHostage_API::OnRescueZoneTouch` target-input entry. If the pawn rescue call site is reached with certain observation and `OnRescueZoneTouch` was not entered for the carried hostage on that Touch stack, Touch Post revalidates the map, round, player life, rescue zone, carried hostage, and prop before submitting a single native `OnRescueZoneTouch` input. Rewards, events, counters, cleanup, and round outcomes remain handled by the engine.<br>2. **T Hostage Pickup**: Patches the native hostage target selector's team check only when `mp_only_cts_rescue_hostages` is known to be `false`; `true` or unknown values keep the native CT-only check. Disabling the module restores the original selector bytes without interrupting a hostage already carried by a Terrorist. |
 | `spawn_capacity` | `sf_spawn_capacity` | `1` | **Spawn Capacity**: Automatically fills T and CT spawn capacity on every map so either team can hold `maxplayers` players. Raises lower native team limits as needed. Retries a join request once after adding capacity for a spawn-related rejection. Includes tools to add and save spawn points manually. |
-| `spectator_compat` | `sf_spectator_compat` | `1` | **Spectator Capacity**: Keeps `mp_spectators_max` and `CCSGameRules::m_iSpectatorSlotCount` aligned with `GetMaxClients()` (`maxplayers`). If an external writer modifies either value during an enabled cycle, the module yields that property for the rest of the cycle and restores only values it still owns on disable, map end, or unload. |
+| `spectator_compat` | `sf_spectator_compat` | `1` | **Spectator Capacity**: Keeps `mp_spectators_max` and `CCSGameRules::m_iSpectatorSlotCount` aligned with `GetMaxClients()` (`maxplayers`). If `mp_spectators_max` is changed while running, GameRules follows that value (including `0`) across map changes. Toggle `sf_spectator_compat` off and back on to resume automatic mode. A conflicting direct GameRules override suspends synchronization for the rest of the enabled cycle. On disable, map end, or unload, the module restores only values it still owns. |
+| `game_ban_fix` | `sf_game_ban_fix` | `0` | **Game Ban Fix**: Verifies the live Steam connection before native GC enforcement and removes expired GC sanctions without dropping active bans or communication state. |
 
 #### FunRounds Ownership Bridge
 
@@ -194,6 +209,7 @@ The plugin provides four independently toggleable modules:
    sf_hostage_compat 1
    sf_spawn_capacity 1
    sf_spectator_compat 1
+   sf_game_ban_fix 0
    ```
 3. Add the following line to `game/csgo/cfg/server.cfg`:
    ```cfg
@@ -223,6 +239,12 @@ sf_status
 ```
 
 > `sf_status` reports CT and T runtime availability separately in the `hostage_compat` reason string. Overall `hostage_compat available=1` means at least one path is available; an unsupported T gate does not block the independent CT path.
+
+#### Game Ban Fix
+
+On a test server, enable `sf_game_ban_fix 1` and check `game_ban_fix available=1` in `sf_status`. The fix targets CS2 Build 26445667 on Windows and Linux. Do not enable another GameBanFix/steam_ban detour at the same time. If the build, signatures, or hooks do not match, only this module stays inactive. After correcting the setup, toggle it off and back on to retry.
+
+The fix leaves `sv_kick_players_with_cooldown` unchanged. At `0` the engine retains its secure-server fallback; below `2`, reasons `20`, `22`, and `23` are hidden only during the check. At `2` the engine applies its normal cooldown policy. Active sanctions remain enforceable on reconnect. The fix does not edit the server's ban list or ban files. For the live acceptance steps, see [游戏封禁残留修复](#游戏封禁残留修复).
 
 #### How Automatic Expansion Works
 
@@ -264,7 +286,7 @@ The `policy` preset separates Windows and Linux build directories automatically.
 
 Building the full plugin requires a C++23 compiler and the pinned inputs documented in [Dependency inputs](docs/DEPENDENCIES.md):
 
-- **Provider & Bindings Contract**: Build with matching Plugify headers and this repository's checked-in `generated-s2sdk/` headers. `bindings/s2sdk.pplugin` is the 161-method / 7-prototype provider manifest (the 159-method base manifest plus `OnMapStart_Register` and `OnMapStart_Unregister`, which S2SDK 3.3.0 exports with the no-argument `OnMapStartCallback` prototype). Do not regenerate bindings from the SDK root's `plugify-plugin-s2sdk.pplugin.in` template.
+- **Provider & Bindings Contract**: Build with matching Plugify headers and this repository's checked-in `generated-s2sdk/` headers. `bindings/s2sdk.pplugin` is the 161-method / 7-prototype provider manifest (the 159-method base manifest plus `OnMapStart_Register` and `OnMapStart_Unregister`, which S2SDK 3.3.1 exports with the no-argument `OnMapStartCallback` prototype). Do not regenerate bindings from the SDK root's `plugify-plugin-s2sdk.pplugin.in` template.
 - **Paired SourceSDK & `tier0` Linking**: Join-team retry uses typed `IServerGameClients::ClientCommand` and `CCommand` from the SourceSDK submodule pinned by S2SDK (`f3de33c58595c628c12b4ffaba76dfcd49b8763f`). Supply the `public` headers and the configured `build` directory from that same S2SDK worktree (including `<build>/external/sourcesdk/protos` and the static `tier0_perproject` archive).
   - **Windows** links `build/external/sourcesdk/Release/tier0_perproject.lib` and `source/external/sourcesdk/lib/win64/tier0.lib` (resolved at runtime from `game/bin/win64/tier0.dll`).
   - **Steam Runtime Linux** builds with the Sniper GCC 14 toolchain and links `build/external/sourcesdk/libtier0_perproject.a` and `source/external/sourcesdk/lib/linuxsteamrt64/libtier0.so` (resolved at runtime from `game/bin/linuxsteamrt64/libtier0.so`).

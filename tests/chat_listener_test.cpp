@@ -58,6 +58,15 @@ int main() {
 	Check( statusRemovals == 1 && !status.registered && !commandRegistered,
 		"failed command registration removes only the exact status listener and records clean state" );
 
+	bool statusListenerAttached = true;
+	Check( !RecordStatusCommandAddResult( status, commandRegistered, false, false, [&] {
+			statusListenerAttached = false;
+			return true;
+		} ) && !statusListenerAttached && !status.registered && !commandRegistered,
+		"an inactive engine entry can still have an SDK listener to roll back" );
+	Check( !RecordStatusCommandAddResult( status, commandRegistered, false, false, [] { return false; } ) &&
+		!status.registered, "failed Add with neither an engine callback nor an SDK listener is already clean" );
+
 	Check( !RecordStatusCommandAddResult( status, commandRegistered, false, true, [] { return false; } ),
 		"failed cleanup does not turn AddConsoleCommand failure into success" );
 	Check( status.registered && !commandRegistered,

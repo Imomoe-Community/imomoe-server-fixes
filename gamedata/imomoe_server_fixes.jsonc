@@ -1,7 +1,19 @@
 {
-  "$schema": "https://raw.githubusercontent.com/Mai-Ooizumi/plugify-plugin-s2sdk/196bb40362e04685c507bb953ebe367ddb9429df/schemas/gamedata.schema.json",
+  "$schema": "https://raw.githubusercontent.com/Mai-Ooizumi/plugify-plugin-s2sdk/2fca1d177ddca1c265ee585457ad160752e9111c/schemas/gamedata.schema.json",
   "csgo": {
     "Signatures": {
+      // Build 26445667: no-argument GC enforcement pass and a separate
+      // reference to its static account map (RIP-relative LEA at +3).
+      "ServerFixes::CheckSteamBan": {
+        "library": "server",
+        "win64": "41 54 48 81 EC 90 00 00 00 48 8B 05 ? ? ? ? 44 8B 60 58 45 85 E4",
+        "linuxsteamrt64": "55 48 89 E5 41 57 41 56 41 55 41 54 53 48 83 EC 68 48 8B 05 ? ? ? ? 44 8B 68 58 45 85 ED"
+      },
+      "ServerFixes::GcBanMapReference": {
+        "library": "server",
+        "win64": "48 8D 0D ? ? ? ? 45 33 C0 4C 89 74 24 78 0F 11 44 24 28",
+        "linuxsteamrt64": "48 8D 35 ? ? ? ? 89 C2 48 63 46 18 83 F8 FF 0F 84"
+      },
       // Build 26445667. SpawnPoint::Spawn calls this with itself to register.
       // Passing nullptr only recounts existing full handles/enabled state;
       // unlike the LevelInit scanner it does not reject occupied locations.

@@ -200,7 +200,7 @@ bool EqualsAsciiCaseInsensitive( std::string_view left, std::string_view right )
 
 bool HasRequiredImports() noexcept {
 	return __s2sdk_AddConsoleCommand != nullptr && __s2sdk_RemoveCommand != nullptr &&
-		__s2sdk_HasConsoleCommandCallbacks != nullptr && __s2sdk_GetAllConCommands != nullptr &&
+		__s2sdk_HasConsoleCommandCallbacks != nullptr &&
 		__s2sdk_AddCommandListener != nullptr && __s2sdk_RemoveCommandListener != nullptr &&
 		__s2sdk_HookEvent != nullptr && __s2sdk_UnhookEvent != nullptr &&
 		__s2sdk_GetEventPlayerSlot != nullptr && __s2sdk_GetEventInt != nullptr &&
@@ -2171,15 +2171,6 @@ void ProcessPendingRetries() noexcept {
 	}
 }
 
-bool CommandExists( std::string_view name ) {
-	for ( const auto& existing : s2sdk::GetAllConCommands( s2sdk::ConVarFlag::None ) ) {
-		if ( EqualsAsciiCaseInsensitive( View( existing ), name ) ) {
-			return true;
-		}
-	}
-	return false;
-}
-
 struct AdminCommand {
 	std::string_view name;
 	s2sdk::ConCommandCallback callback;
@@ -2248,11 +2239,11 @@ bool RegisterAdminCommands( std::string& error ) noexcept {
 	}
 	try {
 		for ( auto& [name, callback, owned] : g_adminCommands ) {
-			if ( CommandExists( name ) ) {
-				error = "console command already exists: " + std::string( name );
+			const plg::string commandName( name );
+			if ( s2sdk::HasConsoleCommandCallbacks( commandName ) ) {
+				error = "console command already has callbacks: " + std::string( name );
 				break;
 			}
-			const plg::string commandName( name );
 			const plg::string description( "Manage this map's ServerFixes-owned spawn points" );
 			owned = true; // Add can fail or throw after installing a callback.
 			if ( !s2sdk::AddConsoleCommand( commandName, description, s2sdk::ConVarFlag::None,

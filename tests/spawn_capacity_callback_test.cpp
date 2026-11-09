@@ -141,6 +141,7 @@ struct SchemaSetCall {
 std::vector<SchemaSetCall> g_schemaSetCalls;
 std::vector<std::string> g_commandReplies;
 std::vector<std::string> g_registeredCommands;
+std::vector<std::string> g_inactiveCommandNames;
 struct FakeCommandListener {
 	std::string name;
 	s2sdk::ConCommandCallback callback{};
@@ -624,6 +625,9 @@ plg::vector<plg::string> FakeGetAllConCommands( s2sdk::ConVarFlag ) {
 	for ( const auto& name : g_registeredCommands ) {
 		result.push_back( plg::string( name ) );
 	}
+	for ( const auto& name : g_inactiveCommandNames ) {
+		result.push_back( plg::string( name ) );
+	}
 	return result;
 }
 
@@ -771,6 +775,7 @@ void ResetFakeEntities() {
 	g_dispatchSpawnCalls = 0;
 	g_entities.clear();
 	g_registeredCommands.clear();
+	g_inactiveCommandNames.clear();
 	g_nextEntityHandle = 1000;
 	g_playerControllerHandle = 100;
 	g_playerPawnHandle = 200;
@@ -1043,11 +1048,21 @@ void TestAdminCommandCleanupUsesCallbackAbsencePostcondition() {
 		"cleanup must retain RemoveCommand=false context while callbacks remain registered" );
 
 	g_fakeRemoveCommandFails = false;
+	g_inactiveCommandNames = g_registeredCommands; // The engine keeps these names after callback removal.
 	g_fakeRemoveCommandReturnsFalseAfterRemoval = true;
 	error.clear();
 	Require( UnregisterAdminCommands( error ) && g_registeredCommands.empty() && error.empty(),
 		"RemoveCommand=false is clean when HasConsoleCommandCallbacks confirms the owned callbacks are absent" );
 	g_fakeRemoveCommandReturnsFalseAfterRemoval = false;
+
+	Require( RegisterAdminCommands( error ) && g_registeredCommands == g_inactiveCommandNames,
+		"all four admin commands can register again when only their names remain" );
+	Require( UnregisterAdminCommands( error ), "re-registered admin commands should unload" );
+
+	g_registeredCommands.emplace_back( "sf_spawn_list" );
+	Require( !RegisterAdminCommands( error ) && error.find( "sf_spawn_list" ) != std::string::npos &&
+		g_registeredCommands == std::vector<std::string>{ "sf_spawn_list" },
+		"an active foreign command blocks registration and survives rollback" );
 }
 
 void TestPartialAdminRegistrationRemainsOwnedAfterFailedRollback() {
@@ -1800,11 +1815,13 @@ void TestSpectatorExternalYieldSurvivesMapEnd() {
 	mapEnd();
 	Require( g_spectatorConVar == "17" && g_spectatorConVarWrites == writesAfterYield && g_conVarLease.yielded,
 		"map end must preserve both the external raw value and the latched yield state" );
+	g_currentRules = reinterpret_cast<void*>( 0x2 );
+	g_rulesSpectatorLimit = 4;
 	const auto afterMapEnd = Update( true, true );
 	Require( afterMapEnd.available &&
 		afterMapEnd.reason.find( "mp_spectators_max has an external owner" ) != std::string::npos &&
-		g_spectatorConVar == "17" && g_spectatorConVarWrites == writesAfterYield,
-		"the same enabled cycle must not reacquire the external ConVar after map end" );
+		g_spectatorConVar == "17" && g_rulesSpectatorLimit == 17 && g_spectatorConVarWrites == writesAfterYield,
+		"the next map must follow the external ConVar without reacquiring it" );
 	Require( Update( false, true ).available && g_spectatorConVar == "17",
 		"disable after map end must continue to preserve the external ConVar" );
 }
@@ -1815,21 +1832,41 @@ void TestSpectatorIntegerConVarOverrideYieldsUntilExplicitOffOn() {
 	Require( Update( true, true ).available && g_spectatorConVar == "12" && g_rulesSpectatorLimit == 12,
 		"spectator capacity must be initialized before the external integer override" );
 	const auto writesBeforeOverride = g_spectatorConVarWrites;
-	g_spectatorConVar = "17";
+	g_spectatorConVar = "4";
 	const auto yielded = Update( true, true );
-	Require( yielded.available && yielded.reason.find( "mp_spectators_max has an external owner" ) != std::string::npos,
-		"an integer ConVar override above actual capacity must be reported as external ownership" );
-	for ( int update = 0; update < 3; ++update ) {
-		Require( Update( true, true ).available, "a sufficient external ConVar value should remain usable across updates" );
-	}
-	Require( g_spectatorConVar == "17" && g_spectatorConVarWrites == writesBeforeOverride,
-		"repeated updates must not overwrite or reacquire an externally changed integer ConVar" );
+	Require( yielded.available && yielded.reason.find( "GameRules follows mp_spectators_max" ) != std::string::npos &&
+		g_rulesSpectatorLimit == 4, "GameRules must follow a manual limit below actual maxplayers" );
+	g_spectatorConVar = "0";
+	Require( Update( true, true ).available && g_rulesSpectatorLimit == 0,
+		"GameRules must follow a zero spectator limit" );
+	g_spectatorConVar = "17";
+	Require( Update( true, true ).available && g_rulesSpectatorLimit == 17 && g_spectatorConVarWrites == writesBeforeOverride,
+		"GameRules must follow later manual edits without writing the ConVar" );
+	const auto schemaWrites = g_schemaSetCalls.size();
+	Require( Update( true, true ).available && g_schemaSetCalls.size() == schemaWrites,
+		"an unchanged manual limit must not write GameRules repeatedly" );
 	Require( Update( false, true ).available && g_spectatorConVar == "17" && g_rulesSpectatorLimit == 0,
 		"disable preserves the external ConVar while restoring the still-owned GameRules value" );
 	Require( Update( true, true ).available && g_spectatorConVar == "12" && g_rulesSpectatorLimit == 12,
 		"an explicit off/on cycle may capture the external integer value and reapply actual maxplayers" );
 	Require( Update( false, true ).available && g_spectatorConVar == "17" && g_rulesSpectatorLimit == 0,
 		"the next disable restores the newly captured external ConVar baseline" );
+}
+
+void TestSpectatorNativeMirrorKeepsFollowingConVar() {
+	using imomoe::server_fixes::spectator_compat::Update;
+	ResetSpectatorModule();
+	Require( Update( true, true ).available, "spectator capacity must initialize" );
+	const auto writes = g_schemaSetCalls.size();
+	g_spectatorConVar = "6";
+	g_rulesSpectatorLimit = 6;
+	Require( Update( true, true ).available && g_schemaSetCalls.size() == writes,
+		"an already-aligned native update does not need a plugin write" );
+	g_spectatorConVar = "5";
+	Require( Update( true, true ).available && g_rulesSpectatorLimit == 5,
+		"an already-aligned native update must not latch the external GameRules override" );
+	Require( Update( false, true ).available && g_spectatorConVar == "5" && g_rulesSpectatorLimit == 6,
+		"disable restores the latest native GameRules baseline, not the initial one" );
 }
 
 void TestSpectatorGameRulesIntegerOverrideYieldsUntilExplicitOffOn() {
@@ -1910,6 +1947,7 @@ int main() {
 	TestSpectatorDisableBetweenMapEndAndMapStartRestoresConVarFirst();
 	TestSpectatorExternalYieldSurvivesMapEnd();
 	TestSpectatorIntegerConVarOverrideYieldsUntilExplicitOffOn();
+	TestSpectatorNativeMirrorKeepsFollowingConVar();
 	TestSpectatorGameRulesIntegerOverrideYieldsUntilExplicitOffOn();
 	TestSpectatorRequiresNetworkChainBeforeMutation();
 	std::cout << "spawn capacity and spectator callback checks passed\n";

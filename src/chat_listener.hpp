@@ -79,14 +79,13 @@ bool RecordStatusCommandAddResult( ListenerState& listener, bool& commandRegiste
 		return true;
 	}
 
-	// S2SDK adds the listener even when its preceding valve-command add fails.
-	// If the unique command name now has callbacks, remove only this callback.
-	if ( callbackPresent ) {
-		listener.registered = true;
-		listener.available = true;
-		if ( !UnregisterListener( listener, std::forward<Remove>( remove ) ) ) {
-			return false;
-		}
+	// S2SDK can attach a listener to an inactive engine entry even if Add fails.
+	listener.registered = true;
+	listener.available = callbackPresent;
+	if ( !UnregisterListener( listener, [&] {
+		return std::forward<Remove>( remove )() || !callbackPresent;
+	} ) ) {
+		return false;
 	}
 	listener.available = false;
 	listener.reason = "status command registration failed";

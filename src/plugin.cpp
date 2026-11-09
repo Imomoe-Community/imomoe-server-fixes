@@ -8,6 +8,7 @@
 
 #include "chat_policy.hpp"
 #include "chat_listener.hpp"
+#include "game_ban_fix.hpp"
 #include "hostage_compat.hpp"
 #include "runtime_lifecycle.hpp"
 #include "spectator_compat.hpp"
@@ -25,6 +26,7 @@ constexpr const char* kChatConVar = "sf_chat_admission";
 constexpr const char* kHostageConVar = "sf_hostage_compat";
 constexpr const char* kSpawnCapacityConVar = "sf_spawn_capacity";
 constexpr const char* kSpectatorCompatConVar = "sf_spectator_compat";
+constexpr const char* kGameBanFixConVar = "sf_game_ban_fix";
 constexpr const char* kStatusCommand = "sf_status";
 
 struct ModuleStatus {
@@ -37,10 +39,12 @@ ModuleStatus g_chat;
 ModuleStatus g_hostage;
 ModuleStatus g_spawnCapacity;
 ModuleStatus g_spectatorCompat;
+ModuleStatus g_gameBanFix{ false };
 std::uint64_t g_chatConVar = 0;
 std::uint64_t g_hostageConVar = 0;
 std::uint64_t g_spawnCapacityConVar = 0;
 std::uint64_t g_spectatorCompatConVar = 0;
+std::uint64_t g_gameBanFixConVar = 0;
 bool g_chatListenerRegistered = false;
 bool g_statusCommandRegistered = false;
 bool g_lifecycleActive = false;
@@ -158,10 +162,12 @@ s2sdk::ResultType OnStatusCommand( std::int32_t slot, s2sdk::ConCommandContext c
 		const auto hostage = ModuleLine( "hostage_compat", g_hostage );
 		const auto spawnCapacity = ModuleLine( "spawn_capacity", g_spawnCapacity );
 		const auto spectatorCompat = ModuleLine( "spectator_compat", g_spectatorCompat );
+		const auto gameBanFix = ModuleLine( "game_ban_fix", g_gameBanFix );
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + chat ) );
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + hostage ) );
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + spawnCapacity ) );
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + spectatorCompat ) );
+		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + gameBanFix ) );
 	} catch ( ... ) {
 		Log( "[ServerFixes] status command failed" );
 	}
@@ -171,11 +177,8 @@ s2sdk::ResultType OnStatusCommand( std::int32_t slot, s2sdk::ConCommandContext c
 bool RegisterStatusCommand() noexcept {
 	try {
 		const plg::string name( kStatusCommand );
-		for ( const auto& existing : s2sdk::GetAllConCommands( s2sdk::ConVarFlag::None ) ) {
-			if ( imomoe::server_fixes::chat::EqualsAsciiCaseInsensitive(
-				std::string_view( existing.data(), existing.size() ), kStatusCommand ) ) {
-				return false;
-			}
+		if ( s2sdk::HasConsoleCommandCallbacks( name ) ) {
+			return false;
 		}
 		const bool commandAdded = s2sdk::AddConsoleCommand( name, plg::string( "Show ServerFixes capability status" ),
 			s2sdk::ConVarFlag::None, OnStatusCommand, s2sdk::HookMode::Pre );
@@ -234,6 +237,10 @@ void RefreshModuleStates( bool includeDiagnostics ) noexcept {
 		g_spectatorCompat.enabled, schemaQueriesReady );
 	g_spectatorCompat.available = spectatorStatus.available;
 	g_spectatorCompat.reason = spectatorStatus.reason;
+	g_gameBanFix.enabled = ReadEnabled( g_gameBanFixConVar, false );
+	const auto gameBanStatus = imomoe::server_fixes::game_ban_fix::Update( g_gameBanFix.enabled );
+	g_gameBanFix.available = gameBanStatus.available;
+	g_gameBanFix.reason = g_gameBanFixConVar ? gameBanStatus.reason : "could not create sf_game_ban_fix";
 	if ( g_chat.enabled ) {
 		(void)RegisterChatListener();
 	} else {
@@ -249,7 +256,7 @@ public:
 			if ( __s2sdk_CreateConVarBool == nullptr || __s2sdk_GetConVarValue == nullptr ||
 				__s2sdk_AddCommandListener == nullptr || __s2sdk_RemoveCommandListener == nullptr ||
 				__s2sdk_AddConsoleCommand == nullptr || __s2sdk_RemoveCommand == nullptr ||
-				__s2sdk_GetAllConCommands == nullptr || __s2sdk_HasConsoleCommandCallbacks == nullptr ||
+				__s2sdk_HasConsoleCommandCallbacks == nullptr ||
 				__s2sdk_IsClientInGame == nullptr ) {
 				return plg::PluginResult{ "Required S2SDK imports are unavailable" };
 			}
@@ -268,6 +275,17 @@ public:
 			if ( g_chatConVar == 0 || g_hostageConVar == 0 || g_spawnCapacityConVar == 0 ||
 				g_spectatorCompatConVar == 0 ) {
 				return plg::PluginResult{ "Could not create ServerFixes ConVars" };
+			}
+
+			try {
+				g_gameBanFixConVar = s2sdk::CreateConVarBool( plg::string( kGameBanFixConVar ), false,
+					plg::string( "Fixes stale Game Coordinator ban records on supported CS2 builds." ),
+					s2sdk::ConVarFlag::SpOnly, false, false, false, false );
+			} catch ( ... ) {
+				g_gameBanFixConVar = 0;
+			}
+			if ( g_gameBanFixConVar == 0 ) {
+				Log( "[ServerFixes] could not create sf_game_ban_fix; GameBanFix disabled" );
 			}
 
 			g_lifecycleActive = true;
@@ -322,6 +340,7 @@ public:
 			(void)imomoe::server_fixes::hostage::Shutdown();
 			(void)imomoe::server_fixes::spawn_capacity::Shutdown();
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
+			(void)imomoe::server_fixes::game_ban_fix::Shutdown();
 			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			(void)UnregisterChatListener();
 			(void)UnregisterStatusCommand();
@@ -334,6 +353,7 @@ public:
 			(void)imomoe::server_fixes::hostage::Shutdown();
 			(void)imomoe::server_fixes::spawn_capacity::Shutdown();
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
+			(void)imomoe::server_fixes::game_ban_fix::Shutdown();
 			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			if ( g_chatListenerRegistered ) {
 				(void)UnregisterChatListener();
@@ -357,10 +377,11 @@ public:
 			const bool hostageClean = imomoe::server_fixes::hostage::Shutdown();
 			const bool spawnClean = imomoe::server_fixes::spawn_capacity::Shutdown();
 			const bool spectatorClean = imomoe::server_fixes::spectator_compat::Shutdown();
+			const bool gameBanClean = imomoe::server_fixes::game_ban_fix::Shutdown();
 			const bool lifecycleClean = imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			const bool chatClean = UnregisterChatListener();
 			const bool statusClean = UnregisterStatusCommand();
-			if ( !hostageClean || !spawnClean || !spectatorClean || !lifecycleClean || !chatClean || !statusClean ) {
+			if ( !hostageClean || !spawnClean || !spectatorClean || !gameBanClean || !lifecycleClean || !chatClean || !statusClean ) {
 				return plg::PluginResult{ "ServerFixes callbacks or owned changes could not be removed" };
 			}
 			return {};
@@ -368,6 +389,7 @@ public:
 			(void)imomoe::server_fixes::hostage::Shutdown();
 			(void)imomoe::server_fixes::spawn_capacity::Shutdown();
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
+			(void)imomoe::server_fixes::game_ban_fix::Shutdown();
 			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			(void)UnregisterChatListener();
 			(void)UnregisterStatusCommand();

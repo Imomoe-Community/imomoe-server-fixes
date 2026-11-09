@@ -123,7 +123,7 @@ bool ReadConVar( std::uint64_t handle, std::string& raw, std::int64_t& parsed, s
 	return true;
 }
 
-bool ApplyConVarCapacity( std::uint64_t handle, std::int64_t target, bool& externalOwner, std::string& error ) {
+bool ApplyConVarCapacity( std::uint64_t handle, std::int64_t& target, bool& externalOwner, std::string& error ) {
 	std::string raw;
 	std::int64_t current{};
 	if ( !ReadConVar( handle, raw, current, error ) ) {
@@ -133,10 +133,7 @@ bool ApplyConVarCapacity( std::uint64_t handle, std::int64_t target, bool& exter
 		g_conVarLease.yielded = true;
 		g_conVarLease.ownsCurrent = false;
 		externalOwner = true;
-		if ( current < target ) {
-			error = "mp_spectators_max has an external owner below actual maxplayers";
-			return false;
-		}
+		target = current;
 		return true;
 	}
 	if ( !g_conVarLease.captured ) {
@@ -210,7 +207,7 @@ bool ApplyGameRulesCapacity( void* rules, std::string map, std::int64_t target, 
 	if ( g_gameRulesYielded ) {
 		externalOwner = true;
 		if ( current < target ) {
-			error = "GameRules spectator slot count has an external owner below actual maxplayers";
+			error = "GameRules spectator slot count has an external owner below mp_spectators_max";
 			return false;
 		}
 		return true;
@@ -229,11 +226,20 @@ bool ApplyGameRulesCapacity( void* rules, std::string map, std::int64_t target, 
 		g_gameRulesLease.observed = true;
 		g_gameRulesLease.lastApplied = current;
 	} else if ( g_gameRulesLease.observed && current != g_gameRulesLease.lastApplied ) {
+		if ( current == target ) {
+			// The engine may already have mirrored the ConVar change.
+			g_gameRulesLease.lastApplied = current;
+			g_gameRulesLease.ownsCurrent = g_conVarLease.ownsCurrent && current != g_gameRulesLease.previous;
+			if ( !g_conVarLease.ownsCurrent ) {
+				g_gameRulesLease.previous = current;
+			}
+			return true;
+		}
 		g_gameRulesLease.ownsCurrent = false;
 		g_gameRulesYielded = true;
 		externalOwner = true;
 		if ( current < target ) {
-			error = "GameRules spectator slot count has an external owner below actual maxplayers";
+			error = "GameRules spectator slot count has an external owner below mp_spectators_max";
 			return false;
 		}
 		return true;
@@ -249,7 +255,7 @@ bool ApplyGameRulesCapacity( void* rules, std::string map, std::int64_t target, 
 			g_gameRulesLease.lastApplied = applied;
 		}
 		if ( applied != target ) {
-			error = "GameRules spectator slot count did not retain actual maxplayers";
+			error = "GameRules spectator slot count did not retain the target capacity";
 			return false;
 		}
 		g_gameRulesLease.observed = true;
@@ -545,8 +551,9 @@ Status Update( bool enabled, bool schemaQueriesReady ) noexcept {
 			SetReason( std::move( error ) );
 			return { false, g_reason };
 		}
+		std::int64_t target = maxPlayers;
 		bool conVarExternalOwner = false;
-		if ( !ApplyConVarCapacity( handle, maxPlayers, conVarExternalOwner, error ) ) {
+		if ( !ApplyConVarCapacity( handle, target, conVarExternalOwner, error ) ) {
 			SetReason( std::move( error ) );
 			return { false, g_reason };
 		}
@@ -554,16 +561,15 @@ Status Update( bool enabled, bool schemaQueriesReady ) noexcept {
 		const std::string map( View( currentMap ) );
 		std::string previousError;
 		bool gameRulesExternalOwner = false;
-		if ( !ApplyGameRulesCapacity( rules, map, maxPlayers, gameRulesExternalOwner, previousError ) ) {
+		if ( !ApplyGameRulesCapacity( rules, map, target, gameRulesExternalOwner, previousError ) ) {
 			SetReason( std::move( previousError ) );
 			return { false, g_reason };
 		}
-		std::string reason = "enabled; spectator capacity follows actual maxplayers";
+		std::string reason = gameRulesExternalOwner ? "enabled; GameRules spectator capacity has an external owner" :
+			( conVarExternalOwner ? "enabled; GameRules follows mp_spectators_max" :
+				"enabled; spectator capacity follows actual maxplayers" );
 		if ( conVarExternalOwner ) {
 			reason += "; mp_spectators_max has an external owner";
-		}
-		if ( gameRulesExternalOwner ) {
-			reason += "; GameRules spectator capacity has an external owner";
 		}
 		SetReason( std::move( reason ) );
 		return { true, g_reason };

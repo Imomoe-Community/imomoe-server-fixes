@@ -8,7 +8,7 @@ When building the full `imomoe_server_fixes` plugin, use the pinned versions bel
 
 | 组件 / Input | 验证版本或来源 / Validated Version or Source |
 | --- | --- |
-| **S2SDK** | `3.3.0`, [signed fork commit `196bb40`](https://github.com/Mai-Ooizumi/plugify-plugin-s2sdk/tree/196bb40362e04685c507bb953ebe367ddb9429df) |
+| **S2SDK** | `3.3.1`, [signed fork commit `2fca1d1`](https://github.com/Mai-Ooizumi/plugify-plugin-s2sdk/tree/2fca1d177ddca1c265ee585457ad160752e9111c) |
 | **SourceSDK** | S2SDK 子模块指针 [`f3de33c`](https://github.com/Wend4r/sourcesdk/tree/f3de33c58595c628c12b4ffaba76dfcd49b8763f) |
 | **Plugify Host** | `3.1.0` |
 | **Plugify C++ Language Module** | `2.4.5` |

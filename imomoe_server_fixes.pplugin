@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/untrustedmodders/plugify/refs/tags/v3.1.0/schemas/plugin.schema.json",
   "version": "0.1.0",
   "name": "imomoe_server_fixes",
-  "description": "Independent Imomoe server fixes for chat admission, hostage compatibility, spawn capacity, and spectator capacity",
+  "description": "Independent Imomoe server fixes for chat admission, hostage compatibility, spawn capacity, spectator capacity, and stale GC bans",
   "author": "Mai Ooizumi",
   "website": "https://github.com/Imomoe-Community/imomoe-server-fixes.git",
   "license": "AGPL-3.0-or-later",

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "spawn_capacity.hpp"
+#include "server_fixes_gamedata.hpp"
 #include "runtime_lifecycle.hpp"
 
 #include "spawn_capacity_policy.hpp"
@@ -584,11 +585,7 @@ bool ResolveNativeSpawnRecount( std::string& error ) noexcept {
 	}
 	try {
 		if ( g_spawnGameConfig == 0 ) {
-			plg::string configPath = plg::GetPlugin()->GetLocation();
-			configPath += "/gamedata/imomoe_server_fixes.jsonc";
-			plg::vector<plg::string> paths;
-			paths.push_back( configPath );
-			g_spawnGameConfig = s2sdk::LoadGameConfigFile( paths );
+			g_spawnGameConfig = LoadServerFixesGameData();
 			if ( g_spawnGameConfig == 0 ) {
 				error = "could not load gamedata/imomoe_server_fixes.jsonc for native spawn-list refresh";
 				return false;

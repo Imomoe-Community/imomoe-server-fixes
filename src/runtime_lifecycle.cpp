@@ -1,4 +1,6 @@
+// Copyright (C) 2026 Mai Ooizumi
 // SPDX-License-Identifier: AGPL-3.0-or-later
+
 #include "runtime_lifecycle.hpp"
 
 #include <s2sdk/s2sdk.hpp>

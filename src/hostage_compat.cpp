@@ -7,6 +7,7 @@
 #include "hostage_gate_patch.hpp"
 #include "hostage_policy.hpp"
 #include "runtime_lifecycle.hpp"
+#include "server_fixes_gamedata.hpp"
 
 #include <polyhook/polyhook.hpp>
 #include <s2sdk/s2sdk.hpp>
@@ -19,7 +20,6 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <limits>
 #include <optional>
 #include <string_view>
 #include <unordered_set>
@@ -82,6 +82,7 @@ thread_local std::size_t g_touchDepth{};
 thread_local std::size_t g_touchOverflowDepth{};
 
 ::hostage::GatePatch g_tTargetGate;
+bool g_tGateAttempted{};
 AttemptLedger g_attempts;
 std::vector<HookLease> g_hookLeases;
 std::unordered_set<std::int32_t> g_rescueZones;
@@ -119,7 +120,6 @@ struct SchemaOffsets {
 SchemaOffsets g_schema{};
 bool g_ctLifecycleReady{};
 void* g_hostageRescueHandler{};
-void* g_pawnRescueDispatcher{};
 void* g_pawnRescueBody{};
 void* g_pawnRescueMarker{};
 std::string g_initializationError{"not initialized"};
@@ -354,65 +354,21 @@ bool PolyHookImportsAvailable() noexcept {
 		__polyhook_GetRegisterPointer;
 }
 
-bool ResolvePawnRescueMarker() noexcept {
-	if ( !g_pawnRescueDispatcher ) {
+bool PawnRescueCallMatches() {
+	const auto image = LocateServerImage();
+	if ( !ServerCodeUnmodified( image, g_pawnRescueMarker, 23 ) ||
+		!ServerCodeUnmodified( image, g_pawnRescueBody, 8 ) ) {
 		return false;
 	}
-	auto* const code = static_cast<std::byte*>( g_pawnRescueDispatcher );
-	// Current CS2 Build 26445667 IDA databases: the dispatcher's final argument move is
-	// immediately followed by its direct pawn-body call. PolyHook follows an E8 call when
-	// hooking the call instruction itself, so place the register-snapshot mid-hook on this
-	// preceding MOV and verify the whole MOV/call/return/callee route before attaching it.
-#if defined(_WIN32)
-	constexpr std::ptrdiff_t kCallOffset = 0x165;
-	constexpr std::ptrdiff_t kMarkerOffset = 0x162;
-	constexpr std::array<std::uint8_t, 3> kExpectedMarker{ 0x48, 0x8B, 0xCF }; // mov rcx, rdi
-	constexpr std::array<std::uint8_t, 5> kExpectedCall{ 0xE8, 0x06, 0xF6, 0x05, 0x00 };
-	constexpr std::array<std::uint8_t, 5> kExpectedReturn{ 0x48, 0x8B, 0x5C, 0x24, 0x50 };
-	constexpr std::array<std::uint8_t, 8> kExpectedBody{ 0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B };
-#elif defined(__linux__)
-	constexpr std::ptrdiff_t kCallOffset = 0xFF;
-	constexpr std::ptrdiff_t kMarkerOffset = 0xFC;
-	constexpr std::array<std::uint8_t, 3> kExpectedMarker{ 0x48, 0x89, 0xDF }; // mov rdi, rbx
-	constexpr std::array<std::uint8_t, 5> kExpectedCall{ 0xE8, 0x1C, 0xFB, 0xFF, 0xFF };
-	constexpr std::array<std::uint8_t, 4> kExpectedReturn{ 0x48, 0x83, 0xC4, 0x20 };
-	constexpr std::array<std::uint8_t, 8> kExpectedBody{ 0x55, 0x48, 0x89, 0xE5, 0x41, 0x57, 0x41, 0x56 };
-#else
-#error "Hostage rescue MOV marker is supported only on Windows x64 and Linux x64"
-#endif
-	auto* const marker = code + kMarkerOffset;
-	auto* const directCall = code + kCallOffset;
-	if ( marker + static_cast<std::ptrdiff_t>( kExpectedMarker.size() ) != directCall ||
-		std::memcmp( marker, kExpectedMarker.data(), kExpectedMarker.size() ) != 0 ||
-		std::memcmp( directCall, kExpectedCall.data(), kExpectedCall.size() ) != 0 ||
-		std::memcmp( directCall + static_cast<std::ptrdiff_t>( kExpectedCall.size() ),
-			kExpectedReturn.data(), kExpectedReturn.size() ) != 0 ) {
+	// The marker is a three-byte MOV followed by the rel32 CALL. Hook the MOV
+	// so PolyHook does not follow the CALL, and confirm the separately resolved body.
+	const auto* call = static_cast<const std::byte*>( g_pawnRescueMarker ) + 3;
+	if ( *call != std::byte{ 0xE8 } ) {
 		return false;
 	}
-	std::int32_t relativeTarget{};
-	std::memcpy( &relativeTarget, directCall + 1, sizeof( relativeTarget ) );
-	const auto returnAddress = reinterpret_cast<std::uintptr_t>( directCall + kExpectedCall.size() );
-	std::uintptr_t bodyAddress{};
-	if ( relativeTarget >= 0 ) {
-		const auto displacement = static_cast<std::uintptr_t>( relativeTarget );
-		if ( returnAddress > std::numeric_limits<std::uintptr_t>::max() - displacement ) {
-			return false;
-		}
-		bodyAddress = returnAddress + displacement;
-	} else {
-		const auto displacement = static_cast<std::uintptr_t>( -static_cast<std::int64_t>( relativeTarget ) );
-		if ( returnAddress < displacement ) {
-			return false;
-		}
-		bodyAddress = returnAddress - displacement;
-	}
-	auto* const body = reinterpret_cast<const std::uint8_t*>( bodyAddress );
-	if ( std::memcmp( body, kExpectedBody.data(), kExpectedBody.size() ) != 0 ) {
-		return false;
-	}
-	g_pawnRescueMarker = marker;
-	g_pawnRescueBody = reinterpret_cast<void*>( bodyAddress );
-	return true;
+	std::int32_t displacement{};
+	std::memcpy( &displacement, call + 1, sizeof( displacement ) );
+	return call + 5 + displacement == g_pawnRescueBody;
 }
 
 bool LoadGameConfig() noexcept {
@@ -424,11 +380,7 @@ bool LoadGameConfig() noexcept {
 		return false;
 	}
 	try {
-		plg::string configPath = plg::GetPlugin()->GetLocation();
-		configPath += "/gamedata/imomoe_server_fixes.jsonc";
-		plg::vector<plg::string> paths;
-		paths.push_back( configPath );
-		g_gameConfig = s2sdk::LoadGameConfigFile( paths );
+		g_gameConfig = LoadServerFixesGameData();
 		if ( g_gameConfig == 0 ) {
 			g_initializationError = "could not load gamedata/imomoe_server_fixes.jsonc";
 			return false;
@@ -440,6 +392,24 @@ bool LoadGameConfig() noexcept {
 	return true;
 }
 
+void ResolveTTargetGate( bool enabled ) noexcept {
+	if ( !enabled ) {
+		g_tGateAttempted = false;
+		return;
+	}
+	if ( g_tGateAttempted || g_tTargetGate.configured() ) {
+		return;
+	}
+	g_tGateAttempted = true;
+	try {
+		if ( __s2sdk_CloseGameConfigFile && __s2sdk_GetGameConfigSignature && LoadGameConfig() ) {
+			(void)g_tTargetGate.configure( s2sdk::GetGameConfigSignature( g_gameConfig, "ServerFixes::HostageTeamGate" ) );
+		}
+	} catch ( ... ) {
+		// Leave only the T gate unavailable; CT observers resolve independently.
+	}
+}
+
 bool ResolveBuildInputs() noexcept {
 	if ( !__s2sdk_GetGameConfigOffset || !__s2sdk_GetGameConfigSignature ) {
 		g_initializationError = "S2SDK gamedata lookup imports unavailable";
@@ -449,10 +419,9 @@ bool ResolveBuildInputs() noexcept {
 		g_touchVTableOffset = s2sdk::GetGameConfigOffset( g_gameConfig, plg::string( "CBaseEntity::Touch" ) );
 		g_hostageRescueHandler = s2sdk::GetGameConfigSignature( g_gameConfig,
 			plg::string( "ServerFixes::HostageOnRescueZoneTouch" ) );
-		g_pawnRescueDispatcher = s2sdk::GetGameConfigSignature( g_gameConfig,
-			plg::string( "ServerFixes::PawnOnRescueZoneTouch" ) );
-		if ( g_touchVTableOffset < 0 || !g_hostageRescueHandler || !g_pawnRescueDispatcher ||
-			!ResolvePawnRescueMarker() ) {
+		g_pawnRescueMarker = s2sdk::GetGameConfigSignature( g_gameConfig, "ServerFixes::PawnRescueBeforeBodyCall" );
+		g_pawnRescueBody = s2sdk::GetGameConfigSignature( g_gameConfig, "ServerFixes::PawnRescueBody" );
+		if ( g_touchVTableOffset < 0 || !g_hostageRescueHandler || !PawnRescueCallMatches() ) {
 			g_initializationError = "current Touch, pawn rescue marker, or native rescue-handler gamedata is unavailable";
 			return false;
 		}
@@ -1192,6 +1161,10 @@ bool UnregisterDisconnect() noexcept {
 
 bool UpdateTTargetGate( bool enabled, bool mpOnlyKnown, bool mpOnlyCts ) noexcept {
 	g_tTargetGate.game_thread_seen();
+	if ( enabled && !g_tTargetGate.configured() ) {
+		g_tGateError = "T target gate signature or instruction layout unavailable in gamedata";
+		return false;
+	}
 	const bool desired = ShouldPatchTTargetGateWhenPolicyUnknown( enabled, mpOnlyKnown, mpOnlyCts );
 	if ( !desired ) {
 		if ( g_tTargetGate.active() ) {
@@ -1294,6 +1267,7 @@ Status Update( bool enabled, std::uint64_t enabledConVarHandle ) noexcept {
 		bool mpOnlyCts{};
 		const bool mpOnlyAvailable = enabled &&
 			ReadBoolConVar( CachedConVar( g_onlyCtsConVar, "mp_only_cts_rescue_hostages" ), mpOnlyCts );
+		ResolveTTargetGate( enabled );
 		const bool tUpdated = UpdateTTargetGate( enabled, mpOnlyAvailable, mpOnlyCts );
 		const bool ctUpdated = UpdateCtObservers( enabled );
 		const bool tAvailable = g_tTargetGate.code_recognized() &&
@@ -1354,7 +1328,8 @@ bool Shutdown() noexcept {
 	g_observedRoundStart.reset();
 	g_ctLifecycleReady = false;
 	g_lastTouchSync = {};
-	g_tTargetGate.invalidate_module();
+	g_tTargetGate.reset_configuration();
+	g_tGateAttempted = false;
 	g_onlyCtsConVar = g_gameTypeConVar = g_gameModeConVar = 0;
 	g_attempts.Clear();
 	g_rescueZones.clear();

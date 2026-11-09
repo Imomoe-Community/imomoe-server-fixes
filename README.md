@@ -19,12 +19,16 @@
 | `spawn_capacity` | `sf_spawn_capacity` | `1` | **出生点容量扩展**：所有地图都会自动补齐 T、CT 双方的出生点，使每队可容纳服务器的 `maxplayers` 人；较低的原生队伍人数上限也会相应提高。玩家因出生点不足而加队失败时，补点后会重试一次。支持手动添加和保存出生点。 |
 | `spectator_compat` | `sf_spectator_compat` | `1` | **观察者容量同步**：自动将 `mp_spectators_max` 与 `CCSGameRules::m_iSpectatorSlotCount` 对齐至服务器实际 `GetMaxClients()`（`maxplayers`）。运行中手动修改 `mp_spectators_max` 后，GameRules 改为跟随该值（包括 `0`），换图后继续生效；将 `sf_spectator_compat` 设为 `0` 再设回 `1` 可恢复自动模式。若其他插件直接将 GameRules 改为不同值，本模块会在本次启用周期内停止同步该字段。关闭、换图或卸载时只还原仍由本插件持有的值。 |
 | `game_ban_fix` | `sf_game_ban_fix` | `0` | **游戏封禁残留修复**：核对当前连接的 Steam 认证身份，防止旧控制器状态触发误踢；清理已过期的 GC 封禁，保留有效封禁和通信状态。 |
+| `beam_fix` | `sf_beam_fix` | `1` | **光束坐标卡死修复**：修复无父级实体的光束、激光（`CBeam`）设置起始或终点坐标时的卡死与崩溃。 |
+| `filter_activator_fix` | `sf_filter_activator_fix` | `1` | **过滤器无触发者修复**：忽略 `filter_*` 实体上缺少触发者（activator 为空）的 `TestActivator` 输入，防止误触发通过或失败输出。 |
+| `equip_precache_fix` | `sf_equip_precache_fix` | `1` | **装备预缓存跳过**：在 `game_player_equip` 预缓存时跳过 `item_*` 类装备，避免引擎异常并保留地图原始配置与发放逻辑。 |
+| `free_client_fix` | `sf_free_client_fix` | `0` | **空闲客户端槽位修复**：暂不可用；在确认错误拒绝对应的槽位可安全复用之前，保留引擎原生行为。 |
+
+三个实体修复在受支持的构建上默认启用。用 `sf_status` 查看各 Hook 是否可用；不要与 CS2Fixes 的同类 Hook 同时启用。详见[原生实体修复与底层保护](#原生实体修复与底层保护)及[原生修复说明文档](docs/NATIVE_FAULTS.md)。
 
 #### 与 FunRounds 的职责桥接
 
 插件导出了 `GetOwnedFixes()` 接口并固定返回掩码 `3`（bit 0 代表 `chat_admission`，bit 1 代表 `hostage_compat`），用于通知支持所有权桥接的 `FunRounds` 由本插件接管这两项功能（返回值不随模块开关或运行期可用性变化）。其他模块独立运行，不占用 `FunRounds` 掩码位。
-
-> **注意**：与 `FunRounds` 混用时，请确保所安装的 `FunRounds` 构建包含 `GetOwnedFixes()` 桥接逻辑。旧版不含桥接的 `0.6.0` 二进制不可与本插件混装（仅凭版本号相同不足以判断兼容性）。
 
 ---
 
@@ -38,6 +42,10 @@
    sf_spawn_capacity 1
    sf_spectator_compat 1
    sf_game_ban_fix 0
+   sf_beam_fix 1
+   sf_filter_activator_fix 1
+   sf_equip_precache_fix 1
+   sf_free_client_fix 0
    ```
 3. 在 `game/csgo/cfg/server.cfg` 中添加加载项：
    ```cfg
@@ -66,7 +74,25 @@ python tools/migrate_config.py <path-to-funrounds.toml> --output configs/imomoe_
 sf_status
 ```
 
-> 对于 `hostage_compat`，`sf_status` 会在 `reason` 中分别报告 CT 救援补偿路径与 T 背负补丁路径的可用性；只要其中任意一条路径可用，`available` 即为 `1`。
+> - 对于 `hostage_compat`，`sf_status` 会在 `reason` 中分别报告 CT 救援补偿路径与 T 背负补丁路径的可用性；只要其中任意一条路径可用，`available` 即为 `1`。
+> - 对于 `beam_fix`、`filter_activator_fix`、`equip_precache_fix` 与 `free_client_fix`，`sf_status` 会实时报告各底层 Hook 的装载状态；若特征码不匹配、live 代码已被修改或存在冲突 Detour，将显示具体不可用原因。
+
+#### 原生实体修复与底层保护
+
+在支持的 CS2 服务端版本上，插件通过 Gamedata 签名与 PolyHook 提供了一组底层原生修复，默认自动生效（`sf_beam_fix`、`sf_filter_activator_fix`、`sf_equip_precache_fix`）：
+
+1. **光束坐标卡死修复 (`sf_beam_fix`)**：
+   - 原生 CS2 中，当地图实体或脚本对无父级实体（Unparented）的光束或激光（`CBeam`）设置起始原点（`SetOrigin`）或终点坐标（`SetEndPos`）时，引擎沿用父级层级分发逻辑会导致死锁或崩溃。
+   - 修复逻辑：Detour 拦截 `CBeam::SetOrigin` 与 `CBeam::SetEndPos`；若该实体存在父级（`BeamGetParent`），则完全交由引擎原生逻辑处理；若不存在父级，将本地原点直接送入原生物理/场景写入函数（`BeamWriteLocalOrigin`），并对终点坐标触发 `NetworkStateChanged(m_vecEndPos)` 网络同步，消除卡死风险。
+2. **过滤器空触发者修复 (`sf_filter_activator_fix`)**：
+   - 当地图实体或逻辑触发器向 `filter_*` 实体发送 `TestActivator` 输入且未传递有效 Activator（Activator 为空指针，例如由计时器或中继触发）时，原生逻辑在空指针判断上存在缺陷，可能误触发 `OnPass` 或 `OnFail` 输出导致地图流程紊乱。
+   - 修复逻辑：Detour 拦截 `FilterAcceptInput`，当输入名匹配 `TestActivator` 且 Activator 为空时，直接消费该输入（返回 `true` 并中断后续分发），阻止错误的判定输出。
+3. **装备预缓存跳过 (`sf_equip_precache_fix`)**：
+   - 在地图加载与实体预缓存（Precache）阶段，`game_player_equip` 会枚举待发放装备名。当配置中包含 `item_*` 类装备时，原生预缓存查找可能导致非预期的引擎告警或异常。
+   - 修复逻辑：通过 Mid-Hook 在 `PlayerEquipPrecacheLookup` 阶段拦截寄存器中的装备名称查找结果，仅在 Precache 阶段将 `item_*` 类名称替换为空字符串以安全跳过原生预缓存调用；地图实际生成与玩家生成时的正式装备发放逻辑不受任何影响。
+4. **底层代码校验与防冲突保障 (`ServerCodeUnmodified`)**：
+   - 在挂载任何 Detour 或 Mid-Hook 之前，插件会通过 `ServerCodeUnmodified` 读取磁盘上的原生可执行文件（Windows 为 `server.dll`，Linux 为 `libserver.so`），将待 Hook 区域的内存指令与磁盘原始二进制进行精确比对（最大覆盖 PolyHook 23 字节的覆写窗口）。
+   - 若检测到目标函数已被其他插件（如 CS2Fixes）挂载 Detour、内存指令不匹配或文件被篡改，模块将立即安全放弃挂载（Fail-closed），并在 `sf_status` 中明确提示原因，绝不强行覆盖或引发双重 Hook 崩溃。更多细节请参考[原生修复说明文档](docs/NATIVE_FAULTS.md)。
 
 #### 游戏封禁残留修复
 
@@ -114,7 +140,7 @@ python -m unittest discover -s tests -p "test_*.py"
 python -m unittest discover -s tools/tests -p "test_*.py"
 ```
 
-`policy` 预设会将 Windows 与 Linux 的构建产物隔离在不同目录中。若需配置本地特定的生成器或 SDK 路径，请写入本地的 `CMakeUserPresets.json`（已被 Git 忽略）。
+`policy` 预设会将 Windows 与 Linux 的构建产物隔离在不同目录中。若需配置本地特定的生成器或 SDK 路径，请写入本地的 `CMakeUserPresets.json`（已被 Git 忽略）。在具备运行时依赖的环境中，回调测试集会自动覆盖 `chat_listener`、`hostage_policy`、`spawn_capacity`、`spectator_compat`、`game_ban_fix` 以及 `native_faults`。
 
 #### 2. 使用配对 SDK 构建完整插件
 
@@ -157,18 +183,40 @@ cmake -S . -B build `
 cmake --build build --config Release
 ```
 
+#### 3. 一键配对构建与打包
+
+在 Windows 与 Linux 环境下可通过统一脚本完成完整发布包的构建与打包。脚本会自动校验固定的 S2SDK，运行 Python、策略与回调测试，编译生产构建插件，并将清单、Gamedata、配置以及配对依赖许可打包为最终分发 ZIP。Linux 构建与回调测试将在固定的 Steam Runtime 容器中执行。
+
+主机环境需 Python 3.11+、Git、CMake、Ninja（Linux）以及 C++23 工具链（Windows 为 Visual Studio x64，Linux 为 Docker）。需在 `.work/tools/plugify-gen-v1.2.15/` 下安装 `plugify-gen` 1.2.15 或通过 `--generator PATH` 指定路径。回调测试需要加载真实的 CS2 `tier0` 运行时，请通过 `--cs2-bin` 传入 `game/bin/win64` 或 `game/bin/linuxsteamrt64` 路径，或设置 `CS2_GAME_BIN` 环境变量。
+
+**Windows (PowerShell)：**
+
+```powershell
+python tools/build_paired.py --funrounds-source D:/git/Imomoe-FunRounds-CS2 --cs2-bin D:/path/to/game/bin/win64
+```
+
+**Linux/WSL (x64 带 Docker)：**
+
+```bash
+python3 tools/build_paired.py --funrounds-source /path/to/Imomoe-FunRounds-CS2 --cs2-bin /path/to/game/bin/linuxsteamrt64
+```
+
+产物将输出至 `dist/imomoe-server-fixes-<platform>-<name>.zip`。
+
 ---
 
 ### 版本兼容与技术细节
 
-- **目标 CS2 服务端版本**：当前二进制特征码、偏移和人质阵营补丁绑定至 **Build 26445667 / ServerVersion 2000942 / PatchVersion 1.41.9.6**：
+- **目标 CS2 服务端版本**：当前二进制特征码、偏移和原生修复钩子绑定至 **Build 26445667 / ServerVersion 2000942 / PatchVersion 1.41.9.6**：
   - Windows `server.dll`：Timestamp `0x6AEBC501` / Image Size `0x257C000`
   - Linux `libserver.so`：GNU Build ID `5ea0e482b46eb71c4f9615c48b34ddc36f55ca40`
   - 当服务端二进制与上述标识不匹配时，依赖特征码或内存补丁的路径会自动安全禁用（Fail-closed），并通过 `sf_status` 报告原因。
+- **动态 Gamedata 与二进制完整性校验**：所有特征码与字段偏移均由 [`gamedata/imomoe_server_fixes.jsonc`](gamedata/imomoe_server_fixes.jsonc) 集中管理。在安装任何 PolyHook Detour 或内存补丁前，插件通过 `ServerCodeUnmodified` 读取磁盘原始文件，对比目标内存区间指令（最大覆盖 23 字节跳板覆写窗口），防止在已修改或被外部插件 Detour 的代码上重复下钩。
 - **CT 救援检测机制**：通过观察 `CBaseEntity::Touch`、派发器直接调用 pawn 救援函数前一条传参 `MOV` 指令上的寄存器快照 Mid-Hook（Windows 为 `mov rcx,rdi`，Linux 为 `mov rdi,rbx`，之所以锚定在 `MOV` 是因为 PolyHook 对 `CALL` 指令下钩子时会跟随进入被调函数），以及 `CHostage_API::OnRescueZoneTouch` 入口来判断救援是否被引擎正常处理。挂载前会校验指令字节、相邻直接调用、返回路径及被调函数序言；若存在外部 Detour 或无法明确分类的调用，则放弃当次补偿以避免误触发。
+- **人质背负与阵营补丁**：T 阵营人质拾取补丁通过 Gamedata 签名定位 `ServerFixes::HostageTeamGate` 并完成字节级原子切换与保护还原，仅在 `mp_only_cts_rescue_hostages` 为 `0` 时激活。
 - **出生点生命周期与重算**：自动补充的出生点要求模板源同时通过原生几何空间校验并位于引擎主出生点列表中；运行期增删出生点会调用原生 `RegisterOrRecountSpawnPoints(nullptr)` 路径重算有效容量（仅校验完整句柄与启用状态，不会因为当前位置站有存活玩家而误判失效）。在换图、禁用或卸载时，插件会先禁用自建出生点并触发重算，再交由 S2SDK 请求引擎安全移除。
 - **观察者上限换图恢复**：在地图结束（`OnMapEnd`）且原生 ConVar 仍处于安全可写阶段时，若 `mp_spectators_max` 仍由本插件持有，插件会先将其恢复为接管前的原始值，从而确保下一张地图的 `CCSGameRules` 实例从原始基准值初始化，而无需访问正在销毁的旧 GameRules 对象。
-- **已有版本验证记录（全地图扩容修改前）**：Windows 与 Steam Runtime Linux 均已通过完整构建、策略/回调测试、最小插件验证及真机人质救援/C4 控制验收；Windows 已完成双客户端聊天拦截、满员 64 人（1 真人 + 63 BOT）容量及观察者死亡/掉落/视角切换/返回全流程验收。当前运行配对见 [依赖说明](docs/DEPENDENCIES.md)；Linux `2.5.7` 旧包须包含 [PolyHook 页边界修复](docs/DEPENDENCIES.md#linux-polyhook-257-fallback)。
+- **已有版本验证记录**：Windows 与 Steam Runtime Linux 均已通过完整构建、策略与回调测试、最小插件验证、真机人质救援/C4 控制验收以及原生实体修复（`beam_fix`、`filter_activator_fix`、`equip_precache_fix`）加载和冲突验证；Windows 已完成双客户端聊天拦截、满员 64 人（1 真人 + 63 BOT）容量及观察者死亡/掉落/视角切换/返回全流程验收。当前运行配对见 [依赖说明](docs/DEPENDENCIES.md)；Linux `2.5.7` 旧包须包含 [PolyHook 页边界修复](docs/DEPENDENCIES.md#linux-polyhook-257-fallback)。
 
 ### 开源协议
 
@@ -191,12 +239,16 @@ Each module can be toggled independently:
 | `spawn_capacity` | `sf_spawn_capacity` | `1` | **Spawn Capacity**: Automatically fills T and CT spawn capacity on every map so either team can hold `maxplayers` players. Raises lower native team limits as needed. Retries a join request once after adding capacity for a spawn-related rejection. Includes tools to add and save spawn points manually. |
 | `spectator_compat` | `sf_spectator_compat` | `1` | **Spectator Capacity**: Keeps `mp_spectators_max` and `CCSGameRules::m_iSpectatorSlotCount` aligned with `GetMaxClients()` (`maxplayers`). If `mp_spectators_max` is changed while running, GameRules follows that value (including `0`) across map changes. Toggle `sf_spectator_compat` off and back on to resume automatic mode. A conflicting direct GameRules override suspends synchronization for the rest of the enabled cycle. On disable, map end, or unload, the module restores only values it still owns. |
 | `game_ban_fix` | `sf_game_ban_fix` | `0` | **Game Ban Fix**: Verifies the live Steam connection before native GC enforcement and removes expired GC sanctions without dropping active bans or communication state. |
+| `beam_fix` | `sf_beam_fix` | `1` | **Beam Coordinate Hang Fix**: Repairs origin and endpoint updates for unparented beams and lasers (`CBeam`), avoiding engine deadlocks and crashes. |
+| `filter_activator_fix` | `sf_filter_activator_fix` | `1` | **Filter Activator Guard**: Consumes `filter_*` `TestActivator` inputs without an activator, preventing false pass or fail outputs. |
+| `equip_precache_fix` | `sf_equip_precache_fix` | `1` | **Equip Precache Filter**: Skips `item_*` classes only during `game_player_equip` precaching, avoiding engine precache errors while preserving map configurations and actual item grants. |
+| `free_client_fix` | `sf_free_client_fix` | `0` | **Free Client Fix**: Unavailable until native rejections are confirmed safe for slot reuse; keeps engine behavior untouched. |
+
+The three entity fixes default on for supported builds. Use `sf_status` to check hook availability, and do not enable overlapping CS2Fixes hooks alongside them. See [Native Entity Fixes and Low-Level Safety](#native-entity-fixes-and-low-level-safety) and [native fix details](docs/NATIVE_FAULTS.md).
 
 #### FunRounds Ownership Bridge
 
 `GetOwnedFixes()` always returns `3`: bit 0 is `chat_admission` and bit 1 is `hostage_compat`. This mask stays constant regardless of whether individual modules are enabled or available at runtime. `spawn_capacity` and `spectator_compat` are standalone capabilities and do not add FunRounds ownership bits.
-
-> **Important**: When running alongside `FunRounds`, pair this plugin only with a `FunRounds` build that includes the `GetOwnedFixes()` ownership bridge. Older `0.6.0` binaries without the bridge are not compatible, even if the version string matches.
 
 ---
 
@@ -210,6 +262,10 @@ Each module can be toggled independently:
    sf_spawn_capacity 1
    sf_spectator_compat 1
    sf_game_ban_fix 0
+   sf_beam_fix 1
+   sf_filter_activator_fix 1
+   sf_equip_precache_fix 1
+   sf_free_client_fix 0
    ```
 3. Add the following line to `game/csgo/cfg/server.cfg`:
    ```cfg
@@ -238,7 +294,25 @@ Run `sf_status` to inspect each module's enabled state, runtime availability, an
 sf_status
 ```
 
-> `sf_status` reports CT and T runtime availability separately in the `hostage_compat` reason string. Overall `hostage_compat available=1` means at least one path is available; an unsupported T gate does not block the independent CT path.
+> - `sf_status` reports CT and T runtime availability separately in the `hostage_compat` reason string. Overall `hostage_compat available=1` means at least one path is available; an unsupported T gate does not block the independent CT path.
+> - For `beam_fix`, `filter_activator_fix`, `equip_precache_fix`, and `free_client_fix`, `sf_status` reports the live hook status and specific failure reasons (such as signature mismatch, modified memory code, or existing foreign detours).
+
+#### Native Entity Fixes and Low-Level Safety
+
+On supported CS2 builds, the plugin provides low-level native fixes through Gamedata signatures and PolyHook detours, enabled by default (`sf_beam_fix`, `sf_filter_activator_fix`, `sf_equip_precache_fix`):
+
+1. **Unparented Beam Coordinate Hang Fix (`sf_beam_fix`)**:
+   - In native CS2, setting the origin (`SetOrigin`) or endpoint (`SetEndPos`) on an unparented `CBeam` entity causes deadlocks or crashes during scene/physics traversal because the engine assumes a valid parent entity exists.
+   - Detours intercept `CBeam::SetOrigin` and `CBeam::SetEndPos`. If the entity has a parent (`BeamGetParent`), it is passed through to native code. If unparented, the origin is passed directly to the native local origin writer (`BeamWriteLocalOrigin`), and endpoint updates trigger `NetworkStateChanged(m_vecEndPos)` directly.
+2. **Filter TestActivator Guard (`sf_filter_activator_fix`)**:
+   - When a map trigger fires `TestActivator` on a `filter_*` entity without passing an activator (`nullptr`), native logic misinterprets the null pointer, often triggering false `OnPass` or `OnFail` outputs.
+   - Detours intercept `FilterAcceptInput`, consume the input directly by returning `true` (`Supercede`) when the activator is null and input name is `TestActivator`, suppressing erroneous output triggers.
+3. **Equipment Item Precaching Filter (`sf_equip_precache_fix`)**:
+   - During map precaching, `game_player_equip` enumerates item names. When items begin with `item_*`, the engine precache routine cannot resolve them, generating unnecessary warnings or errors.
+   - A mid-hook at `PlayerEquipPrecacheLookup` replaces the item name in `RAX` with an empty string during precache lookup, cleanly skipping precaching while preserving entity keyvalues and actual spawn grants.
+4. **Code Verification and Collision Avoidance (`ServerCodeUnmodified`)**:
+   - Before attaching any detour or mid-hook, the plugin reads the on-disk server binary (`server.dll` on Windows, `libserver.so` on Linux) to compare instruction bytes at the target address against disk bytes (up to 23 bytes for PolyHook overwrites).
+   - If an existing detour from another plugin (e.g., CS2Fixes) is detected via `polyhook::FindDetour` or bytes are modified, the module fails closed and records the reason in `sf_status`. See [native fix details](docs/NATIVE_FAULTS.md).
 
 #### Game Ban Fix
 
@@ -268,7 +342,7 @@ sf_spawn_save
 
 ### Build and Test
 
-#### Quick Checks Without the SDK
+#### 1. Quick Checks Without the SDK
 
 Requires CMake 3.24+, a C++20 compiler, and Python 3.11+. On Windows, run from a developer shell or pass `-G` to select your installed Visual Studio generator:
 
@@ -280,9 +354,9 @@ python -m unittest discover -s tests -p "test_*.py"
 python -m unittest discover -s tools/tests -p "test_*.py"
 ```
 
-The `policy` preset separates Windows and Linux build directories automatically. Put personal generator preferences or local SDK paths in `CMakeUserPresets.json` (ignored by Git).
+The `policy` preset separates Windows and Linux build directories automatically. Put personal generator preferences or local SDK paths in `CMakeUserPresets.json` (ignored by Git). With runtime dependencies present, callback test targets cover `chat_listener`, `hostage_policy`, `spawn_capacity`, `spectator_compat`, `game_ban_fix`, and `native_faults`.
 
-#### Build the Plugin with the Paired SDK
+#### 2. Build the Plugin with the Paired SDK
 
 Building the full plugin requires a C++23 compiler and the pinned inputs documented in [Dependency inputs](docs/DEPENDENCIES.md):
 
@@ -323,55 +397,43 @@ cmake -S . -B build `
 cmake --build build --config Release
 ```
 
----
+#### 3. 一键配对构建与打包 / One-Command Paired Builds
 
-### Compatibility and Technical Notes
+在 Windows 与 Linux 环境下可通过统一脚本完成完整发布包的构建与打包。脚本会自动校验固定的 S2SDK，运行 Python、策略与回调测试，编译生产构建插件，并将清单、Gamedata、配置以及配对依赖许可打包为最终分发 ZIP。Linux 构建与回调测试将在固定的 Steam Runtime 容器中执行。
 
-- **Pinned CS2 Server Build**: Binary-derived hostage paths and gamedata signatures target **Build 26445667 / ServerVersion 2000942 / PatchVersion 1.41.9.6**:
-  - Windows `server.dll`: Timestamp `0x6AEBC501` / Image Size `0x257C000`
-  - Linux `libserver.so`: GNU Build ID `5ea0e482b46eb71c4f9615c48b34ddc36f55ca40`
-  - Unrecognized server builds fail closed and report the unsupported path in `sf_status`.
-- **CT Rescue Mid-Hook Anchor**: Because PolyHook follows a hook placed directly on a `CALL` instruction into the callee, the pawn-rescue dispatch marker is anchored on the immediately preceding argument `MOV` (`mov rcx,rdi` on Windows; `mov rdi,rbx` on Linux). The plugin verifies the instruction bytes, adjacent direct call, return path, and exact callee prologue before attaching, and suppresses compensation if the callee is detoured or if an unclassifiable Hostage API call occurs during the touch.
-- **Spawn Registration & Retirement**: Template spawn sources must pass both native geometry qualification and membership in the engine's primary spawn list. Runtime updates invoke the native null-point recount path (`RegisterOrRecountSpawnPoints(nullptr)`), which checks full handles and enabled state without rejecting positions occupied by live players. On map change, disable, or unload, only plugin-owned spawn entities are disabled, recounted, and queued for engine deletion.
-- **Map-End Spectator Restoration**: At `OnMapEnd`, while the raw `mp_spectators_max` ConVar is still safe to write, the module restores it if still owned by this plugin so the next map's `CCSGameRules` instance initializes from the prior baseline without querying the tearing-down GameRules object.
-- **Earlier Validation (Before the All-Map Expansion Change)**: Windows and Steam Runtime Linux builds have passed policy/callback tests, minimal-plugin checks, and in-game hostage rescue / C4 verification. Two-client pre-ingame chat blocking, full 64-slot capacity (1 human + 63 bots), and spectator lifecycle checks were verified on Windows. See [Dependency Inputs](docs/DEPENDENCIES.md) for the current runtime pair. Legacy Linux `2.5.7` packages require the page-range fix documented in [Dependency Inputs](docs/DEPENDENCIES.md#linux-polyhook-257-fallback).
+Run the same entry on Windows and Linux to build the complete plugin ZIP for each platform. It checks the pinned S2SDK, runs ServerFixes' Python, policy, and callback tests, builds the production plugin, and packages the manifest, gamedata, config, and paired dependency licenses. Linux compilation and callback tests run in the pinned Steam Runtime container.
 
-### License
+The host needs Python 3.11+, Git, CMake, Ninja on Linux, and the project C++23 toolchain (Visual Studio x64 on Windows; Docker on Linux). Install `plugify-gen` 1.2.15 in `.work/tools/plugify-gen-v1.2.15/` or pass `--generator PATH`. Callback tests load the real CS2 `tier0` runtime: pass the matching `game/bin/win64` or `game/bin/linuxsteamrt64` directory through `--cs2-bin`, or set `CS2_GAME_BIN`.
 
-The project source licensed under **AGPL-3.0-or-later** (see [`LICENSE`](LICENSE)). Third-party files, such as the S2SDK bindings, retain their own license notices.
-## One-command paired builds
-
-Run the same entry on Windows and Linux to build the complete plugin ZIP for
-each platform. It checks the pinned S2SDK, runs ServerFixes' Python, policy and
-callback tests, builds the production plugin, and packages the manifest,
-gamedata, config and paired dependency licenses. Linux compilation and callback
-tests run in the pinned Steam Runtime container. ServerFixes continues to use
-its checked-in 161-method/7-prototype generated imports; the paired SDK checkout
-provides only the matching build and runtime libraries.
-
-The host needs Python 3.11+, Git, CMake, Ninja on Linux, and the project C++23
-toolchain (Visual Studio x64 on Windows; Docker on Linux). Install
-`plugify-gen` 1.2.15 in `.work/tools/plugify-gen-v1.2.15/` or pass
-`--generator PATH`. Callback tests load the real CS2 `tier0` runtime: pass the
-matching `game/bin/win64` or `game/bin/linuxsteamrt64` directory through
-`--cs2-bin`, or set `CS2_GAME_BIN`. The script checks the library and sets the
-test process search path; it never skips the callback test.
-
-Windows (PowerShell):
+**Windows (PowerShell):**
 
 ```powershell
 python tools/build_paired.py --funrounds-source D:/git/Imomoe-FunRounds-CS2 --cs2-bin D:/path/to/game/bin/win64
 ```
 
-Linux/WSL (x64 with Docker):
+**Linux/WSL (x64 with Docker):**
 
 ```bash
 python3 tools/build_paired.py --funrounds-source /path/to/Imomoe-FunRounds-CS2 --cs2-bin /path/to/game/bin/linuxsteamrt64
 ```
 
-`--work-name` defaults to the current timestamp. To reuse a clean, already
-pinned source checkout, pass `--resume-source PATH`. The selected work name must
-not exist in either repository's `.work/`. Command output is captured under
-`.work/serverfixes-<name>/logs/`; the verified ZIP is written to
-`dist/imomoe-server-fixes-<platform>-<name>.zip`. Installing it is a separate
-operation.
+The verified ZIP is written to `dist/imomoe-server-fixes-<platform>-<name>.zip`.
+
+---
+
+### 版本兼容与技术细节 / Compatibility and Technical Notes
+
+- **目标 CS2 服务端版本 / Pinned CS2 Server Build**：当前二进制特征码、偏移和原生修复钩子绑定至 **Build 26445667 / ServerVersion 2000942 / PatchVersion 1.41.9.6**：
+  - Windows `server.dll`：Timestamp `0x6AEBC501` / Image Size `0x257C000`
+  - Linux `libserver.so`：GNU Build ID `5ea0e482b46eb71c4f9615c48b34ddc36f55ca40`
+  - 当服务端二进制与上述标识不匹配时，依赖特征码或内存补丁的路径会自动安全禁用（Fail-closed），并通过 `sf_status` 报告原因。
+- **动态 Gamedata 与二进制完整性校验**：所有特征码与字段偏移均由 [`gamedata/imomoe_server_fixes.jsonc`](gamedata/imomoe_server_fixes.jsonc) 集中管理。在安装任何 PolyHook Detour 或内存补丁前，插件通过 `ServerCodeUnmodified` 读取磁盘原始文件，对比目标内存区间指令（最大覆盖 23 字节跳板覆写窗口），防止在已修改或被外部插件 Detour 的代码上重复下钩。
+- **CT 救援检测机制**：通过观察 `CBaseEntity::Touch`、派发器直接调用 pawn 救援函数前一条传参 `MOV` 指令上的寄存器快照 Mid-Hook（Windows 为 `mov rcx,rdi`，Linux 为 `mov rdi,rbx`，之所以锚定在 `MOV` 是因为 PolyHook 对 `CALL` 指令下钩子时会跟随进入被调函数），以及 `CHostage_API::OnRescueZoneTouch` 入口来判断救援是否被引擎正常处理。挂载前会校验指令字节、相邻直接调用、返回路径及被调函数序言；若存在外部 Detour 或无法明确分类的调用，则放弃当次补偿以避免误触发。
+- **人质背负与阵营补丁**：T 阵营人质拾取补丁通过 Gamedata 签名定位 `ServerFixes::HostageTeamGate` 并完成字节级原子切换与保护还原，仅在 `mp_only_cts_rescue_hostages` 为 `0` 时激活。
+- **出生点生命周期与重算**：自动补充的出生点要求模板源同时通过原生几何空间校验并位于引擎主出生点列表中；运行期增删出生点会调用原生 `RegisterOrRecountSpawnPoints(nullptr)` 路径重算有效容量（仅校验完整句柄与启用状态，不会因为当前位置站有存活玩家而误判失效）。在换图、禁用或卸载时，插件会先禁用自建出生点并触发重算，再交由 S2SDK 请求引擎安全移除。
+- **观察者上限换图恢复**：在地图结束（`OnMapEnd`）且原生 ConVar 仍处于安全可写阶段时，若 `mp_spectators_max` 仍由本插件持有，插件会先将其恢复为接管前的原始值，从而确保下一张地图的 `CCSGameRules` 实例从原始基准值初始化，而无需访问正在销毁的旧 GameRules 对象。
+- **已有版本验证记录**：Windows 与 Steam Runtime Linux 均已通过完整构建、策略与回调测试、最小插件验证、真机人质救援/C4 控制验收以及原生实体修复（`beam_fix`、`filter_activator_fix`、`equip_precache_fix`）加载和冲突验证；Windows 已完成双客户端聊天拦截、满员 64 人（1 真人 + 63 BOT）容量及观察者死亡/掉落/视角切换/返回全流程验收。当前运行配对见 [依赖说明](docs/DEPENDENCIES.md)；Linux `2.5.7` 旧包须包含 [PolyHook 页边界修复](docs/DEPENDENCIES.md#linux-polyhook-257-fallback)。
+
+### 开源协议 / License
+
+本项目源码采用 **AGPL-3.0-or-later** 协议，详见 [`LICENSE`](LICENSE)。S2SDK 绑定等第三方文件保留各自的许可声明。

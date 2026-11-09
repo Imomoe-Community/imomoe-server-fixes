@@ -3,6 +3,7 @@
 
 #include "game_ban_fix.cpp"
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
@@ -37,7 +38,8 @@ void Require( bool condition, std::string_view message ) {
 }
 
 const char* g_value = "0";
-std::array<std::byte, static_cast<std::size_t>( kControllerSteamId ) + sizeof( std::uint64_t )> g_controller{};
+constexpr std::ptrdiff_t kTestSteamIdOffset = 8;
+std::array<std::byte, kTestSteamIdOffset + sizeof( std::uint64_t )> g_controller{};
 std::uint64_t g_liveSteamId{};
 std::uint8_t g_nativeValid{1};
 bool g_authorized{};
@@ -74,7 +76,8 @@ bool CanCheck( std::uint64_t steamId, bool authorized, std::uint64_t liveSteamId
 	g_authorized = authorized;
 	g_liveSteamId = liveSteamId;
 	g_nativeValid = nativeValid;
-	std::memcpy( g_controller.data() + kControllerSteamId, &steamId, sizeof( steamId ) );
+	g_controllerSteamId = kTestSteamIdOffset;
+	std::memcpy( g_controller.data() + kTestSteamIdOffset, &steamId, sizeof( steamId ) );
 	Require( OnCheckIdentity( nullptr, g_controller.data(), 0, nullptr, CallbackType::Pre ) == ResultType::Ignored,
 		"native instructions must still run" );
 	return g_nativeValid != 0;

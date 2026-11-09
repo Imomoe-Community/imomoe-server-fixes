@@ -1,4 +1,6 @@
+// Copyright (C) 2026 Mai Ooizumi
 // SPDX-License-Identifier: AGPL-3.0-or-later
+
 #pragma once
 
 #include <cstddef>
@@ -25,6 +27,7 @@ struct ServerImage {
     std::string identity;
     std::string reason;
 #ifndef _WIN32
+    const char* path{};
     const ElfW(Phdr)* phdr{};
     std::size_t phnum{};
 #endif
@@ -66,6 +69,7 @@ inline int find_server(struct dl_phdr_info* info, std::size_t, void* opaque) {
     if (search.count == 1) {
         search.module.present = true;
         search.module.base = static_cast<std::uintptr_t>(info->dlpi_addr);
+        search.module.path = path;
         search.module.phdr = info->dlpi_phdr;
         search.module.phnum = info->dlpi_phnum;
     }

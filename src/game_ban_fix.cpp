@@ -3,13 +3,13 @@
 
 #include "game_ban_fix.hpp"
 #include "game_ban_pass.hpp"
-#include "server_image.hpp"
+#include "server_code.hpp"
+#include "server_fixes_gamedata.hpp"
 
 #include <polyhook/polyhook.hpp>
 #include <s2sdk/s2sdk.hpp>
 #include <tier0/platform.h>
 
-#include <array>
 #include <charconv>
 #include <cstring>
 
@@ -20,23 +20,9 @@ using polyhook::CallbackType;
 using polyhook::ResultType;
 
 #if defined(_WIN32)
-constexpr std::uintptr_t kThinkRva = 0x93EED0;
-constexpr std::uintptr_t kMapReferenceRva = 0x910EE2;
-constexpr std::uintptr_t kMapRva = 0x211A108;
-constexpr std::uintptr_t kIdentityOffset = 0x143;
-constexpr std::array<std::uint8_t, 13> kIdentityBytes{
-	0x84, 0xC0, 0x0F, 0x84, 0x73, 0x02, 0x00, 0x00, 0x44, 0x8B, 0x7C, 0x24, 0x24 };
 constexpr auto kControllerRegister = polyhook::RegisterType::RSI;
-constexpr std::ptrdiff_t kControllerSteamId = 0x710;
 #elif defined(__linux__)
-constexpr std::uintptr_t kThinkRva = 0x13F6800;
-constexpr std::uintptr_t kMapReferenceRva = 0x15686A0;
-constexpr std::uintptr_t kMapRva = 0x29653E0;
-constexpr std::uintptr_t kIdentityOffset = 0x9B;
-constexpr std::array<std::uint8_t, 12> kIdentityBytes{
-	0x84, 0xC0, 0x0F, 0x84, 0x95, 0x01, 0x00, 0x00, 0x0F, 0xB6, 0x45, 0xAE };
 constexpr auto kControllerRegister = polyhook::RegisterType::R15;
-constexpr std::ptrdiff_t kControllerSteamId = 0x9E8;
 #endif
 
 struct Hook {
@@ -48,6 +34,7 @@ Hook g_think;
 Hook g_identity;
 GcBanMap* g_bans{};
 s2sdk::ConfigId g_config{};
+std::ptrdiff_t g_controllerSteamId{};
 std::uint64_t g_cooldown{};
 BanPass g_pass;
 unsigned int g_depth{};
@@ -104,7 +91,7 @@ ResultType OnCheckIdentity( polyhook::HookHandle, polyhook::ParametersHandle reg
 			return ResultType::Ignored;
 		}
 		std::uint64_t steamId{};
-		std::memcpy( &steamId, controller + kControllerSteamId, sizeof( steamId ) );
+		std::memcpy( &steamId, controller + g_controllerSteamId, sizeof( steamId ) );
 		if ( !g_bans->HasElement( static_cast<std::uint32_t>( steamId ) ) ) {
 			return ResultType::Ignored;
 		}
@@ -154,6 +141,7 @@ bool Detach( Hook& hook, polyhook::CallbackHandler callback, bool post ) {
 
 const char* Attach() {
 	if ( !__s2sdk_LoadGameConfigFile || !__s2sdk_CloseGameConfigFile || !__s2sdk_GetGameConfigSignature ||
+		!__s2sdk_GetGameConfigOffset ||
 		!__s2sdk_FindConVar || !__s2sdk_GetConVarValue || !__polyhook_HookDetour || !__polyhook_HookDetour2 ||
 		!__polyhook_FindDetour || !__polyhook_AddCallback || !__polyhook_RemoveCallback ||
 		!__polyhook_IsCallbackRegistered || !__polyhook_AreCallbacksRegistered || !__polyhook_UnhookDetour ||
@@ -170,30 +158,29 @@ const char* Attach() {
 	if ( !g_cooldown ) {
 		return "sv_kick_players_with_cooldown not found";
 	}
-	plg::string path = plg::GetPlugin()->GetLocation();
-	path += "/gamedata/imomoe_server_fixes.jsonc";
-	g_config = s2sdk::LoadGameConfigFile( { path } );
+	g_config = LoadServerFixesGameData();
 	if ( !g_config ) {
 		return "could not load ServerFixes gamedata";
 	}
-	g_think.address = s2sdk::GetGameConfigSignature( g_config, plg::string( "ServerFixes::CheckSteamBan" ) );
-	auto* mapRef = static_cast<const std::byte*>(
-		s2sdk::GetGameConfigSignature( g_config, plg::string( "ServerFixes::GcBanMapReference" ) ) );
-	if ( reinterpret_cast<std::uintptr_t>( g_think.address ) != image.base + kThinkRva ||
-		reinterpret_cast<std::uintptr_t>( mapRef ) != image.base + kMapReferenceRva ) {
-		return "CheckSteamBan or GC ban map signature did not resolve to its verified address";
+	g_think.address = s2sdk::GetGameConfigSignature( g_config, "ServerFixes::CheckSteamBan" );
+	g_identity.address = s2sdk::GetGameConfigSignature( g_config, "ServerFixes::GcBanIdentity" );
+	auto* mapRef = static_cast<std::byte*>(
+		s2sdk::GetGameConfigSignature( g_config, "ServerFixes::GcBanMapReference" ) );
+	g_controllerSteamId = s2sdk::GetGameConfigOffset( g_config, "CBasePlayerController::m_steamID" );
+	if ( !g_think.address || !g_identity.address || !mapRef || g_controllerSteamId <= 0 ) {
+		return "GC ban map, hook signature, or controller Steam ID offset unavailable in gamedata";
 	}
+	if ( !ServerCodeUnmodified( image, g_think.address, 23 ) ||
+		!ServerCodeUnmodified( image, g_identity.address, 23 ) ||
+		!ServerCodeUnmodified( image, mapRef, 7 ) ) {
+		return "GC ban hook or map reference instructions have changed";
+	}
+	// RIP-relative LEA: disp32 starts after three opcode bytes and is relative to the next instruction.
 	std::int32_t displacement{};
 	std::memcpy( &displacement, mapRef + 3, sizeof( displacement ) );
-	if ( mapRef + 7 + displacement != reinterpret_cast<const std::byte*>( image.base + kMapRva ) ) {
-		return "GC ban map RIP-relative operand does not match this build";
-	}
+	auto* bans = reinterpret_cast<GcBanMap*>( mapRef + 7 + displacement );
 	// Test the native Steam-ID validity result before the GC lookup. The
 	// instruction consumes AL, and EBX still holds the enumerated slot.
-	g_identity.address = static_cast<std::byte*>( g_think.address ) + kIdentityOffset;
-	if ( std::memcmp( g_identity.address, kIdentityBytes.data(), kIdentityBytes.size() ) != 0 ) {
-		return "native GC identity check instructions do not match this build";
-	}
 	if ( polyhook::FindDetour( g_think.address ) || polyhook::FindDetour( g_identity.address ) ) {
 		return "CheckSteamBan already has a detour; disable the other GC ban fix";
 	}
@@ -207,7 +194,7 @@ const char* Attach() {
 		!Add( g_think.owned, CallbackType::Post, OnThink ) || !Add( g_think.owned, CallbackType::Pre, OnThink ) ) {
 		return "could not install GC identity guard or CheckSteamBan callbacks";
 	}
-	g_bans = reinterpret_cast<GcBanMap*>( image.base + kMapRva );
+	g_bans = bans;
 	g_armed = true;
 	return nullptr;
 }

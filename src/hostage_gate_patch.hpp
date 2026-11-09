@@ -1,16 +1,19 @@
+// Copyright (C) 2026 Mai Ooizumi
 // SPDX-License-Identifier: AGPL-3.0-or-later
+
 #pragma once
 
-#include "server_image.hpp"
+#include "server_code.hpp"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
+#include <utility>
+#include <vector>
 
 #ifndef _WIN32
 #include <sys/mman.h>
@@ -24,11 +27,44 @@ class GatePatch final {
 public:
     bool active() const noexcept { return active_; }
 
+    bool configured() const noexcept { return !original_.empty(); }
+
+    bool configure(const void* address) {
+        const auto& module = cached_module();
+        if (!imomoe::server_fixes::ServerCodeUnmodified(module, address, 14)) return false;
+        const auto* code = static_cast<const std::uint8_t*>(address);
+        // cmp byte ptr [reg+disp32], CT; jnz rel8 (Windows) or jz rel32 (Linux).
+        // Change the comparison to test for the T bit and invert the condition.
+        const std::size_t rex = code[0] == 0x41 ? 1 : 0;
+        const auto* cmp = code + rex;
+        if (cmp[0] != 0x80 || cmp[1] != 0xBD || cmp[6] != 3) return false;
+        const bool near_jump = cmp[7] == 0x0F && cmp[8] == 0x84;
+        if (!near_jump && cmp[7] != 0x75) return false;
+        const auto length = rex + (near_jump ? 13 : 9);
+        std::vector<std::uint8_t> original(code, code + length);
+        auto patched = original;
+        patched[rex] = 0xF6; // TEST r/m8, imm8
+        patched[rex + 1] &= 0xC7; // Change the ModR/M opcode extension from /7 to /0.
+        patched[rex + 6] = 2;
+        patched[rex + (near_jump ? 8 : 7)] ^= 1;
+        gate_rva_ = reinterpret_cast<std::uintptr_t>(address) - module.base;
+        patched_ = std::move(patched);
+        original_ = std::move(original);
+        return true;
+    }
+
+    void reset_configuration() noexcept {
+        original_.clear();
+        patched_.clear();
+        invalidate_module();
+    }
+
     bool code_recognized() {
+        if (!configured()) return false;
         const auto& module = cached_module();
         if (!module.ok) return false;
-        const auto* const target = reinterpret_cast<const std::uint8_t*>(module.base + kGateRva);
-        return equals(target, kOriginal) || equals(target, kPatched);
+        const auto* const target = reinterpret_cast<const std::uint8_t*>(module.base + gate_rva_);
+        return equals(target, original_) || equals(target, patched_);
     }
 
     void invalidate_module() noexcept { module_.reset(); }
@@ -36,10 +72,11 @@ public:
     void game_thread_seen() noexcept { game_thread_ = current_thread(); }
 
     void enable() {
+        if (!configured()) throw std::runtime_error("hostage gate gamedata unavailable");
         const bool had_module = module_ && module_->present;
         const auto& observed = cached_module();
         if (active_ && !protection_pending_ && observed.ok && observed.base == base_ && observed.identity == identity_
-            && equals(reinterpret_cast<const std::uint8_t*>(base_ + kGateRva), kPatched)) return;
+            && equals(reinterpret_cast<const std::uint8_t*>(base_ + gate_rva_), patched_)) return;
         require_game_thread();
         // Recheck the mapping before changing bytes or recovering protection.
         if (had_module && observed.ok) module_ = imomoe::server_fixes::LocateServerImage();
@@ -48,13 +85,13 @@ public:
             if (!module.present) clear_ownership();
             throw std::runtime_error("unsupported module: " + module.reason);
         }
-        auto* const target = reinterpret_cast<std::uint8_t*>(module.base + kGateRva);
+        auto* const target = reinterpret_cast<std::uint8_t*>(module.base + gate_rva_);
         if (active_) {
             if (module.base != base_) {
                 clear_ownership();
             } else if (module.identity != identity_) {
                 throw std::runtime_error("original hostage module identity changed at the owned base; refusing a stale write");
-            } else if (equals(target, kPatched)) {
+            } else if (equals(target, patched_)) {
                 if (protection_pending_) {
                     if (!restore_protection(target, original_protection_)) {
                         throw std::runtime_error("hostage gate is active, but original page protection is still pending; retry sf_hostage_compat 0");
@@ -62,7 +99,7 @@ public:
                     protection_pending_ = false;
                 }
                 return;
-            } else if (equals(target, kOriginal)) {
+            } else if (equals(target, original_)) {
                 if (protection_pending_ && !restore_protection(target, original_protection_)) {
                     throw std::runtime_error("original gate bytes are present, but page protection restoration is pending");
                 }
@@ -71,15 +108,15 @@ public:
                 throw std::runtime_error("hostage gate was changed by another writer; preserving those bytes");
             }
         }
-        if (!equals(target, kOriginal)) {
+        if (!equals(target, original_)) {
             throw std::runtime_error("hostage gate bytes differ from the expected unpatched build; no write made");
         }
 
-        const auto write = write_code(module, target, kPatched, false, 0);
+        const auto write = write_code(module, target, patched_, false, 0);
         if (!write.bytes_written) {
             throw std::runtime_error("could not make the hostage gate code page writable");
         }
-        if (!equals(target, kPatched)) {
+        if (!equals(target, patched_)) {
             throw std::runtime_error("hostage gate write readback was unexpected; stop the server and inspect this build");
         }
 
@@ -119,23 +156,23 @@ public:
             throw std::runtime_error("original hostage module identity changed at the owned base; refusing a stale write");
         }
 
-        auto* const target = reinterpret_cast<std::uint8_t*>(base_ + kGateRva);
-        if (equals(target, kOriginal)) {
+        auto* const target = reinterpret_cast<std::uint8_t*>(base_ + gate_rva_);
+        if (equals(target, original_)) {
             if (protection_pending_ && !restore_protection(target, original_protection_)) {
                 throw std::runtime_error("original gate bytes are back, but page protection restoration is still pending; retry sf_hostage_compat 0");
             }
             clear_ownership();
             return;
         }
-        if (!equals(target, kPatched)) {
+        if (!equals(target, patched_)) {
             throw std::runtime_error("hostage gate was changed by another writer; preserving those bytes");
         }
 
-        const auto write = write_code(module, target, kOriginal, true, original_protection_);
+        const auto write = write_code(module, target, original_, true, original_protection_);
         if (!write.bytes_written) {
             throw std::runtime_error("could not make the owned hostage gate writable; ownership retained");
         }
-        if (!equals(target, kOriginal)) {
+        if (!equals(target, original_)) {
             throw std::runtime_error("hostage gate restoration readback failed; ownership retained");
         }
         protection_pending_ = !write.protection_restored;
@@ -161,13 +198,9 @@ private:
 
 #ifdef _WIN32
     using Thread = DWORD;
-    static constexpr std::uintptr_t kGateRva = 0xAC7735;
-    static constexpr std::array<std::uint8_t, 9> kOriginal{0x80, 0xBD, 0x44, 0x03, 0x00, 0x00, 0x03, 0x75, 0x30};
-    static constexpr std::array<std::uint8_t, 9> kPatched{0xF6, 0x85, 0x44, 0x03, 0x00, 0x00, 0x02, 0x74, 0x30};
     static Thread current_thread() noexcept { return GetCurrentThreadId(); }
 
-    template <std::size_t N>
-    static WriteResult write_code(const Module&, std::uint8_t* target, const std::array<std::uint8_t, N>& bytes,
+    static WriteResult write_code(const Module&, std::uint8_t* target, std::span<const std::uint8_t> bytes,
                                   bool use_saved_protection, int saved_protection) noexcept {
         DWORD observed{};
         if (!VirtualProtect(target, bytes.size(), PAGE_EXECUTE_READWRITE, &observed)) return {};
@@ -179,17 +212,12 @@ private:
         return {true, flushed && restored, static_cast<int>(restore_to)};
     }
 
-    static bool restore_protection(std::uint8_t* target, int protection) noexcept {
+    bool restore_protection(std::uint8_t* target, int protection) noexcept {
         DWORD ignored{};
-        return VirtualProtect(target, kOriginal.size(), static_cast<DWORD>(protection), &ignored) != 0;
+        return VirtualProtect(target, original_.size(), static_cast<DWORD>(protection), &ignored) != 0;
     }
 #else
     using Thread = long;
-    static constexpr std::uintptr_t kGateRva = 0x15AF2EB;
-    static constexpr std::array<std::uint8_t, 14> kOriginal{
-        0x41, 0x80, 0xBD, 0x24, 0x06, 0x00, 0x00, 0x03, 0x0F, 0x84, 0x07, 0x01, 0x00, 0x00};
-    static constexpr std::array<std::uint8_t, 14> kPatched{
-        0x41, 0xF6, 0x85, 0x24, 0x06, 0x00, 0x00, 0x02, 0x0F, 0x85, 0x07, 0x01, 0x00, 0x00};
     static Thread current_thread() noexcept { return static_cast<Thread>(::syscall(SYS_gettid)); }
 
     static bool page_range(std::uint8_t* target, std::size_t length, std::uintptr_t& first,
@@ -222,8 +250,7 @@ private:
         return false;
     }
 
-    template <std::size_t N>
-    static WriteResult write_code(const Module& module, std::uint8_t* target, const std::array<std::uint8_t, N>& bytes,
+    static WriteResult write_code(const Module& module, std::uint8_t* target, std::span<const std::uint8_t> bytes,
                                   bool use_saved_protection, int saved_protection) noexcept {
         int protection = 0;
         if (!module.ok || !segment_protection(module, target, bytes.size(), protection)) return {};
@@ -238,16 +265,15 @@ private:
         return {true, restored, restore_to};
     }
 
-    static bool restore_protection(std::uint8_t* target, int protection) noexcept {
+    bool restore_protection(std::uint8_t* target, int protection) noexcept {
         std::uintptr_t first{};
         std::size_t span{};
-        if (!page_range(target, kOriginal.size(), first, span)) return false;
+        if (!page_range(target, original_.size(), first, span)) return false;
         return ::mprotect(reinterpret_cast<void*>(first), span, protection) == 0;
     }
 #endif
 
-    template <std::size_t N>
-    static bool equals(const std::uint8_t* target, const std::array<std::uint8_t, N>& bytes) noexcept {
+    static bool equals(const std::uint8_t* target, std::span<const std::uint8_t> bytes) noexcept {
         return std::memcmp(target, bytes.data(), bytes.size()) == 0;
     }
 
@@ -266,6 +292,8 @@ private:
     }
 
     std::optional<Module> module_;
+    std::uintptr_t gate_rva_{};
+    std::vector<std::uint8_t> original_, patched_;
     bool active_{};
     bool protection_pending_{};
     std::uintptr_t base_{};

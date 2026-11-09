@@ -10,10 +10,12 @@
 #include "chat_listener.hpp"
 #include "game_ban_fix.hpp"
 #include "hostage_compat.hpp"
+#include "native_faults.hpp"
 #include "runtime_lifecycle.hpp"
 #include "spectator_compat.hpp"
 #include "spawn_capacity.hpp"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -33,6 +35,24 @@ struct ModuleStatus {
 	bool enabled = true;
 	bool available = false;
 	std::string reason = "not initialized";
+};
+
+namespace native_faults = imomoe::server_fixes::native_faults;
+struct NativeModule {
+	native_faults::Fix fix;
+	const char* name;
+	const char* conVarName;
+	const char* description;
+	bool enabledByDefault;
+	std::uint64_t conVar{};
+	ModuleStatus status{ false };
+};
+
+std::array g_nativeModules{
+	NativeModule{ native_faults::Fix::Beam, "beam_fix", "sf_beam_fix", "Fixes origin and endpoint updates for unparented beams and lasers.", true },
+	NativeModule{ native_faults::Fix::Filter, "filter_activator_fix", "sf_filter_activator_fix", "Consumes filter TestActivator inputs with no activator.", true },
+	NativeModule{ native_faults::Fix::Equip, "equip_precache_fix", "sf_equip_precache_fix", "Skips item class precaching in game_player_equip.", true },
+	NativeModule{ native_faults::Fix::FreeClient, "free_client_fix", "sf_free_client_fix", "Reports the unavailable free-client repair in sf_status.", false },
 };
 
 ModuleStatus g_chat;
@@ -168,6 +188,9 @@ s2sdk::ResultType OnStatusCommand( std::int32_t slot, s2sdk::ConCommandContext c
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + spawnCapacity ) );
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + spectatorCompat ) );
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + gameBanFix ) );
+		for ( const auto& module : g_nativeModules ) {
+			s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + ModuleLine( module.name, module.status ) ) );
+		}
 	} catch ( ... ) {
 		Log( "[ServerFixes] status command failed" );
 	}
@@ -214,6 +237,12 @@ bool UnregisterStatusCommand() noexcept {
 void RefreshModuleStates( bool includeDiagnostics ) noexcept {
 	if ( !g_lifecycleActive ) {
 		return;
+	}
+	for ( auto& module : g_nativeModules ) {
+		module.status.enabled = module.conVar && ReadEnabled( module.conVar, module.enabledByDefault );
+		const auto status = native_faults::Update( module.fix, module.status.enabled );
+		module.status.available = status.available;
+		module.status.reason = module.conVar ? status.reason : "could not create feature ConVar";
 	}
 	g_chat.enabled = ReadEnabled( g_chatConVar, g_chat.enabled );
 	g_hostage.enabled = ReadEnabled( g_hostageConVar, g_hostage.enabled );
@@ -287,6 +316,14 @@ public:
 			if ( g_gameBanFixConVar == 0 ) {
 				Log( "[ServerFixes] could not create sf_game_ban_fix; GameBanFix disabled" );
 			}
+			for ( auto& module : g_nativeModules ) {
+				try {
+					module.conVar = s2sdk::CreateConVarBool( plg::string( module.conVarName ), module.enabledByDefault,
+						plg::string( module.description ), s2sdk::ConVarFlag::SpOnly, false, false, false, false );
+				} catch ( ... ) {
+					module.conVar = 0;
+				}
+			}
 
 			g_lifecycleActive = true;
 			g_chat.enabled = ReadEnabled( g_chatConVar, true );
@@ -341,6 +378,7 @@ public:
 			(void)imomoe::server_fixes::spawn_capacity::Shutdown();
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
 			(void)imomoe::server_fixes::game_ban_fix::Shutdown();
+			(void)native_faults::Shutdown();
 			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			(void)UnregisterChatListener();
 			(void)UnregisterStatusCommand();
@@ -354,6 +392,7 @@ public:
 			(void)imomoe::server_fixes::spawn_capacity::Shutdown();
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
 			(void)imomoe::server_fixes::game_ban_fix::Shutdown();
+			(void)native_faults::Shutdown();
 			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			if ( g_chatListenerRegistered ) {
 				(void)UnregisterChatListener();
@@ -378,10 +417,12 @@ public:
 			const bool spawnClean = imomoe::server_fixes::spawn_capacity::Shutdown();
 			const bool spectatorClean = imomoe::server_fixes::spectator_compat::Shutdown();
 			const bool gameBanClean = imomoe::server_fixes::game_ban_fix::Shutdown();
+			const bool nativeClean = native_faults::Shutdown();
 			const bool lifecycleClean = imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			const bool chatClean = UnregisterChatListener();
 			const bool statusClean = UnregisterStatusCommand();
-			if ( !hostageClean || !spawnClean || !spectatorClean || !gameBanClean || !lifecycleClean || !chatClean || !statusClean ) {
+			if ( !hostageClean || !spawnClean || !spectatorClean || !gameBanClean || !nativeClean ||
+				!lifecycleClean || !chatClean || !statusClean ) {
 				return plg::PluginResult{ "ServerFixes callbacks or owned changes could not be removed" };
 			}
 			return {};
@@ -390,6 +431,7 @@ public:
 			(void)imomoe::server_fixes::spawn_capacity::Shutdown();
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
 			(void)imomoe::server_fixes::game_ban_fix::Shutdown();
+			(void)native_faults::Shutdown();
 			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			(void)UnregisterChatListener();
 			(void)UnregisterStatusCommand();

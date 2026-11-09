@@ -146,6 +146,7 @@ if(SERVER_FIXES_POLICY_TESTS_ONLY)
 		server_fixes_add_callback_test(server_fixes_spawn_capacity_callback_test server_fixes_spawn_capacity_callbacks
 			tests/spawn_capacity_callback_test.cpp src/hostage_compat.cpp src/runtime_lifecycle.cpp)
 		server_fixes_add_callback_test(server_fixes_game_ban_fix_callback_test server_fixes_game_ban_fix_callbacks tests/game_ban_fix_callback_test.cpp)
+		server_fixes_add_callback_test(server_fixes_native_faults_callback_test server_fixes_native_faults_callbacks tests/native_faults_callback_test.cpp)
 	endif()
 	return()
 endif()
@@ -166,6 +167,7 @@ endif()
 add_library(imomoe-server-fixes SHARED
 	src/plugin.cpp
 	src/game_ban_fix.cpp
+	src/native_faults.cpp
 	src/runtime_lifecycle.cpp
 	src/hostage_compat.cpp
 	src/spawn_capacity.cpp

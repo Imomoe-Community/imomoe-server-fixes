@@ -9,18 +9,19 @@
 
 namespace imomoe::server_fixes::hostage {
 
-inline bool ReadHostageDispatchTarget( const void* dispatchArgument, std::int32_t& targetHandle ) noexcept {
+inline bool ReadHostageDispatchTarget( const void* dispatchArgument, std::uintptr_t handlePointerOffset,
+	std::int32_t& targetHandle ) noexcept {
 	constexpr std::uintptr_t kMinUserAddress = 0x10000;
-	constexpr std::uintptr_t kHandlePointerOffset = 8;
+	constexpr auto kLastPointer = std::numeric_limits<std::uintptr_t>::max() - sizeof( std::uintptr_t );
 	const auto base = reinterpret_cast<std::uintptr_t>( dispatchArgument );
 	if ( base < kMinUserAddress || base % alignof( std::uintptr_t ) != 0 ||
-		base > std::numeric_limits<std::uintptr_t>::max() - kHandlePointerOffset - sizeof( std::uintptr_t ) ) {
+		base > kLastPointer || handlePointerOffset > kLastPointer - base ) {
 		return false;
 	}
 
 	// The matched native handler reads these same fields on entry.
 	std::uintptr_t handleStorage{};
-	std::memcpy( &handleStorage, reinterpret_cast<const void*>( base + kHandlePointerOffset ), sizeof( handleStorage ) );
+	std::memcpy( &handleStorage, reinterpret_cast<const void*>( base + handlePointerOffset ), sizeof( handleStorage ) );
 	if ( handleStorage < kMinUserAddress || handleStorage % alignof( std::int32_t ) != 0 ) {
 		return false;
 	}

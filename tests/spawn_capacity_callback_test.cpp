@@ -348,8 +348,10 @@ public:
 		plg::vector<plg::string> arguments;
 		arguments.push_back( plg::string( command.Arg( 0 ) ) );
 		arguments.push_back( plg::string( command.Arg( 1 ) ) );
-		(void)imomoe::server_fixes::spawn_capacity::OnJoinCommandPre( static_cast<std::int32_t>( slot ),
-			s2sdk::ConCommandContext::Console, arguments );
+		if ( imomoe::server_fixes::spawn_capacity::OnJoinCommandPre( static_cast<std::int32_t>( slot ),
+			s2sdk::ConCommandContext::Console, arguments ) >= s2sdk::ResultType::Handled ) {
+			return;
+		}
 		g_playerTeam = static_cast<std::int32_t>( Team::Terrorist );
 	}
 	void ClientStringTableData( CPlayerSlot, void* ) override {
@@ -908,6 +910,33 @@ void QueueCapacityFailureForCurrentClient() {
 	FakeEvent failure{ .slot = 0, .reason = kFailureTerroristFull };
 	(void)OnJoinFailedEvent( plg::string( "jointeam_failed" ), &failure, false );
 	Require( g_pendingRetries.size() == 1, "the real Pre/event sequence queues one rejected request" );
+}
+
+void TestTeamGuardPreservesAdmittedCapacityRetry() {
+	using namespace imomoe::server_fixes::spawn_capacity;
+	namespace guards = imomoe::server_fixes::compat_guards;
+	ResetSpawnModule( "de_poseidon" );
+	AddNativeSource( Team::Terrorist );
+	__s2sdk_CreateConVarInt32 = []( const plg::string& name, int, const plg::string&,
+		s2sdk::ConVarFlag, bool, int, bool, int ) -> std::uint64_t {
+		return std::string_view( name.data(), name.size() ) == "sf_team_switch_limit" ? 1 : 0;
+	};
+	__s2sdk_GetConVarInt32 = []( std::uint64_t ) { return 1; };
+	__s2sdk_CreateConVarBool = []( const plg::string&, bool, const plg::string&, s2sdk::ConVarFlag,
+		bool, bool, bool, bool ) -> std::uint64_t { return 0; };
+	guards::Init();
+	guards::Update( true );
+	QueueCapacityFailureForCurrentClient();
+
+	plg::vector<plg::string> request;
+	request.push_back( plg::string( "jointeam" ) );
+	request.push_back( plg::string( "3" ) );
+	Require( OnJoinCommandPre( 0, s2sdk::ConCommandContext::Console, request ) == s2sdk::ResultType::Stop,
+		"the second external team switch must be rejected before mutating the saved request" );
+	ProcessPendingRetries();
+	Require( g_retryDispatches == 1 && g_playerTeam == static_cast<int>( Team::Terrorist ),
+		"the earlier admitted request must still complete its one internal retry" );
+	Require( guards::Shutdown(), "the team guard must release its callbacks" );
 }
 
 void TestNegativePlayerHandlesRetainJoinRetryIdentity() {
@@ -1904,6 +1933,55 @@ void TestSpectatorRequiresNetworkChainBeforeMutation() {
 	Require( Shutdown(), "a schema-availability failure must still release the map callback cleanly" );
 }
 
+void TestCheatsOffClearsNoclipAcrossPawnReplacement() {
+	namespace guards = imomoe::server_fixes::compat_guards;
+	static s2sdk::ConVarCallback changed{};
+	static bool noclipEnabled{};
+	static s2sdk::MoveType moveType{};
+	static s2sdk::MoveType actualMoveType{};
+	ResetFakeEntities();
+	g_playerInGame = true;
+	g_otherTPlayers = 0;
+	__s2sdk_CreateConVarInt32 = nullptr;
+	__s2sdk_CreateConVarBool = []( const plg::string& name, bool, const plg::string&, s2sdk::ConVarFlag,
+		bool, bool, bool, bool ) -> std::uint64_t { return name == "sf_noclip_reset" ? 1 : 0; };
+	__s2sdk_GetConVarBool = []( std::uint64_t handle ) { return handle == 1; };
+	__s2sdk_FindConVar = []( const plg::string& name ) -> std::uint64_t { return name == "sv_cheats" ? 2 : 0; };
+	__s2sdk_HookConVarChange = []( std::uint64_t, s2sdk::ConVarCallback callback ) { changed = callback; return true; };
+	__s2sdk_UnhookConVarChange = []( std::uint64_t, s2sdk::ConVarCallback ) { changed = nullptr; return true; };
+	__s2sdk_GetEntSchemaEnt2 = []( void*, const plg::string&, const plg::string&, int ) { return g_playerPawnHandle; };
+	__s2sdk_GetEntityMoveType = []( int ) { return moveType; };
+	__s2sdk_SetEntityMoveType = []( int, s2sdk::MoveType type ) { moveType = type; };
+	__s2sdk_GetEntSchema2 = []( void*, const plg::string&, const plg::string& field, int ) -> std::int64_t {
+		return field == "m_bNoClipEnabled" ? noclipEnabled : static_cast<std::int64_t>( actualMoveType );
+	};
+	__s2sdk_SetEntSchema2 = []( void* entity, const plg::string& type, const plg::string& field, std::int64_t value,
+		bool changeState, int ) {
+		if ( field == "m_bNoClipEnabled" ) {
+			Require( entity == FindEntity( g_playerControllerHandle ) && type == "CBasePlayerController" && changeState,
+				"noclip intent must be cleared on the networked controller, not the current pawn" );
+			noclipEnabled = value != 0;
+		} else {
+			actualMoveType = static_cast<s2sdk::MoveType>( value );
+		}
+	};
+	guards::Init();
+	guards::Update( true );
+	Require( changed != nullptr, "noclip repair must listen for the cheats falling edge" );
+	for ( const bool alive : { true, false } ) {
+		g_playerAlive = alive;
+		noclipEnabled = true;
+		moveType = actualMoveType = s2sdk::MoveType::Noclip;
+		changed( 2, plg::string( "0" ), plg::string( "1" ) );
+		guards::Update( true );
+		Require( !noclipEnabled, "a replacement pawn must not inherit noclip, even if cheats were disabled while dead" );
+		const auto expected = alive ? s2sdk::MoveType::Walk : s2sdk::MoveType::Noclip;
+		Require( moveType == expected && actualMoveType == expected,
+			"the current living pawn must walk without changing a dead pawn" );
+	}
+	Require( guards::Shutdown() && !changed, "noclip repair must release its ConVar callback" );
+}
+
 } // namespace
 
 int main() {
@@ -1917,6 +1995,7 @@ int main() {
 	g_gameDirectory = std::filesystem::temp_directory_path() /
 		( "serverfixes-spawn-callback-root-" + std::to_string( ticks ) );
 	TestActualJoinCallbacksRejectStaleQueuedRetry();
+	TestTeamGuardPreservesAdmittedCapacityRetry();
 	TestActualLifeEventInvalidatesQueuedRetry();
 	TestActualJoinCallbacksRetryOneMatchingCapacityFailure();
 	TestNegativePlayerHandlesRetainJoinRetryIdentity();
@@ -1950,6 +2029,7 @@ int main() {
 	TestSpectatorNativeMirrorKeepsFollowingConVar();
 	TestSpectatorGameRulesIntegerOverrideYieldsUntilExplicitOffOn();
 	TestSpectatorRequiresNetworkChainBeforeMutation();
+	TestCheatsOffClearsNoclipAcrossPawnReplacement();
 	std::cout << "spawn capacity and spectator callback checks passed\n";
 	return EXIT_SUCCESS;
 }

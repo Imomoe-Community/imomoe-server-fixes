@@ -9,6 +9,19 @@
 
 namespace s2sdk {
 
+  using _ServerCommandEx = plg::string (*)(const plg::string&);
+}
+extern "C" PLUGIN_API s2sdk::_ServerCommandEx __s2sdk_ServerCommandEx;
+namespace s2sdk {
+  /**
+   * @brief Executes a server command right away as if it were on the server console (or RCON) and returns the printed text. Console commands and convars only: commands are split on ';' and new lines, aliases are not expanded.
+   * @param command (string): The command to execute on the server.
+   * @return string: String to store command result into.
+   */
+  inline plg::string ServerCommandEx(const plg::string& command) {
+    return __s2sdk_ServerCommandEx(command);
+  }
+
   using _AddConsoleCommand = bool (*)(const plg::string&, const plg::string&, ConVarFlag, ConCommandCallback, HookMode);
 }
 extern "C" PLUGIN_API s2sdk::_AddConsoleCommand __s2sdk_AddConsoleCommand;

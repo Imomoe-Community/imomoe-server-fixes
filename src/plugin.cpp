@@ -8,8 +8,10 @@
 
 #include "chat_policy.hpp"
 #include "chat_listener.hpp"
+#include "compat_guards.hpp"
 #include "game_ban_fix.hpp"
 #include "hostage_compat.hpp"
+#include "map_maintenance.hpp"
 #include "native_faults.hpp"
 #include "runtime_lifecycle.hpp"
 #include "spectator_compat.hpp"
@@ -38,6 +40,8 @@ struct ModuleStatus {
 };
 
 namespace native_faults = imomoe::server_fixes::native_faults;
+namespace guards = imomoe::server_fixes::compat_guards;
+namespace maps = imomoe::server_fixes::map_maintenance;
 struct NativeModule {
 	native_faults::Fix fix;
 	const char* name;
@@ -53,6 +57,14 @@ std::array g_nativeModules{
 	NativeModule{ native_faults::Fix::Filter, "filter_activator_fix", "sf_filter_activator_fix", "Consumes filter TestActivator inputs with no activator.", true },
 	NativeModule{ native_faults::Fix::Equip, "equip_precache_fix", "sf_equip_precache_fix", "Skips item class precaching in game_player_equip.", true },
 	NativeModule{ native_faults::Fix::FreeClient, "free_client_fix", "sf_free_client_fix", "Reports the unavailable free-client repair in sf_status.", false },
+	NativeModule{ native_faults::Fix::HammerId, "hammer_id", "sf_hammer_id", "Preserves Hammer IDs from map entity keyvalues on supported CS2 builds.", false },
+	NativeModule{ native_faults::Fix::CstvBotQuota, "cstv_bot_quota", "sf_cstv_bot_quota", "Excludes CSTV from native bot quota removal.", false },
+	NativeModule{ native_faults::Fix::WaterJump, "water_jump", "sf_water_jump", "Skips the ground classification immediately after water movement.", false },
+	NativeModule{ native_faults::Fix::JumpSpam, "jump_spam", "sf_jump_spam", "Allows at most one native jump per pawn and movement tick.", false },
+	NativeModule{ native_faults::Fix::KeyValues, "keyvalues_flood", "sf_keyvalues_flood", "Limits incoming KeyValues commands per connection.", false },
+	NativeModule{ native_faults::Fix::BlankMap, "blank_map", "sf_blank_map", "Restarts the current map if match end leaves no transition queued.", false },
+	NativeModule{ native_faults::Fix::SlowAnimation, "slow_animation", "sf_slow_animation", "Refreshes maps before the game clock loses animation precision.", false },
+	NativeModule{ native_faults::Fix::RampBug, "rampbug", "sf_rampbug", "Repairs inconsistent slope traces during native player movement.", false },
 };
 
 ModuleStatus g_chat;
@@ -188,6 +200,11 @@ s2sdk::ResultType OnStatusCommand( std::int32_t slot, s2sdk::ConCommandContext c
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + spawnCapacity ) );
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + spectatorCompat ) );
 		s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + gameBanFix ) );
+		for ( const auto& status : { guards::VoiceStatus(), guards::TeamStatus(), guards::NoclipStatus(),
+			guards::WorkshopVoiceStatus(), guards::GhostStatus() } ) {
+			s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + ModuleLine( status.name,
+				{ status.enabled, status.available, status.reason } ) ) );
+		}
 		for ( const auto& module : g_nativeModules ) {
 			s2sdk::ReplyToCommand( context, slot, plg::string( "[ServerFixes] " + ModuleLine( module.name, module.status ) ) );
 		}
@@ -238,22 +255,34 @@ void RefreshModuleStates( bool includeDiagnostics ) noexcept {
 	if ( !g_lifecycleActive ) {
 		return;
 	}
-	for ( auto& module : g_nativeModules ) {
-		module.status.enabled = module.conVar && ReadEnabled( module.conVar, module.enabledByDefault );
-		const auto status = native_faults::Update( module.fix, module.status.enabled );
-		module.status.available = status.available;
-		module.status.reason = module.conVar ? status.reason : "could not create feature ConVar";
-	}
 	g_chat.enabled = ReadEnabled( g_chatConVar, g_chat.enabled );
 	g_hostage.enabled = ReadEnabled( g_hostageConVar, g_hostage.enabled );
 	g_spawnCapacity.enabled = ReadEnabled( g_spawnCapacityConVar, g_spawnCapacity.enabled );
 	g_spectatorCompat.enabled = ReadEnabled( g_spectatorCompatConVar, g_spectatorCompat.enabled );
 	const bool lifecycleReady = imomoe::server_fixes::runtime_lifecycle::EnsureRegistered(
-		imomoe::server_fixes::hostage::OnMapEnd );
+		[]() noexcept {
+			native_faults::OnMapEnd();
+			maps::OnMapEnd();
+			imomoe::server_fixes::hostage::OnMapEnd();
+			guards::OnMapEnd();
+		} );
+	const bool schemaQueriesReady = lifecycleReady && imomoe::server_fixes::runtime_lifecycle::SchemaQueriesReady();
+	for ( auto& module : g_nativeModules ) {
+		module.status.enabled = module.conVar && ReadEnabled( module.conVar, module.enabledByDefault );
+		const auto status = [&] {
+			switch ( module.fix ) {
+			case native_faults::Fix::BlankMap: return maps::UpdateBlankMap( module.status.enabled, schemaQueriesReady, !includeDiagnostics );
+			case native_faults::Fix::SlowAnimation: return maps::UpdateSlowAnimation( module.status.enabled, schemaQueriesReady, !includeDiagnostics );
+			default: return native_faults::Update( module.fix, module.status.enabled, schemaQueriesReady );
+			}
+		}();
+		module.status.available = status.available;
+		module.status.reason = module.conVar ? status.reason : "could not create feature ConVar";
+	}
 	const auto hostageStatus = imomoe::server_fixes::hostage::Update( g_hostage.enabled, g_hostageConVar );
 	g_hostage.available = hostageStatus.available;
 	g_hostage.reason = hostageStatus.reason;
-	const bool schemaQueriesReady = lifecycleReady && imomoe::server_fixes::runtime_lifecycle::SchemaQueriesReady();
+	guards::Update( schemaQueriesReady );
 	if ( schemaQueriesReady ) {
 		const auto spawnStatus = imomoe::server_fixes::spawn_capacity::Update( g_spawnCapacity.enabled, includeDiagnostics );
 		g_spawnCapacity.available = spawnStatus.available;
@@ -367,6 +396,9 @@ public:
 				}
 				return plg::PluginResult{ "ServerFixes could not register sf_status" };
 			}
+			guards::Init();
+			native_faults::Init();
+			maps::Init();
 			RefreshModuleStates();
 			return {};
 		} catch ( ... ) {
@@ -379,6 +411,8 @@ public:
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
 			(void)imomoe::server_fixes::game_ban_fix::Shutdown();
 			(void)native_faults::Shutdown();
+			(void)maps::Shutdown();
+			(void)guards::Shutdown();
 			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			(void)UnregisterChatListener();
 			(void)UnregisterStatusCommand();
@@ -393,6 +427,8 @@ public:
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
 			(void)imomoe::server_fixes::game_ban_fix::Shutdown();
 			(void)native_faults::Shutdown();
+			(void)maps::Shutdown();
+			(void)guards::Shutdown();
 			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			if ( g_chatListenerRegistered ) {
 				(void)UnregisterChatListener();
@@ -417,11 +453,13 @@ public:
 			const bool spawnClean = imomoe::server_fixes::spawn_capacity::Shutdown();
 			const bool spectatorClean = imomoe::server_fixes::spectator_compat::Shutdown();
 			const bool gameBanClean = imomoe::server_fixes::game_ban_fix::Shutdown();
-			const bool nativeClean = native_faults::Shutdown();
+			const bool mapsClean = maps::Shutdown();
+			const bool nativeClean = native_faults::Shutdown() && mapsClean;
+			const bool guardsClean = guards::Shutdown();
 			const bool lifecycleClean = imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			const bool chatClean = UnregisterChatListener();
 			const bool statusClean = UnregisterStatusCommand();
-			if ( !hostageClean || !spawnClean || !spectatorClean || !gameBanClean || !nativeClean ||
+			if ( !hostageClean || !spawnClean || !spectatorClean || !gameBanClean || !nativeClean || !guardsClean ||
 				!lifecycleClean || !chatClean || !statusClean ) {
 				return plg::PluginResult{ "ServerFixes callbacks or owned changes could not be removed" };
 			}
@@ -432,6 +470,8 @@ public:
 			(void)imomoe::server_fixes::spectator_compat::Shutdown();
 			(void)imomoe::server_fixes::game_ban_fix::Shutdown();
 			(void)native_faults::Shutdown();
+			(void)maps::Shutdown();
+			(void)guards::Shutdown();
 			(void)imomoe::server_fixes::runtime_lifecycle::Shutdown();
 			(void)UnregisterChatListener();
 			(void)UnregisterStatusCommand();

@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [Unreleased] / 未发布
+
+### 简体中文
+
+- **配对依赖**：使用 S2SDK 3.4.2；PolyHook 最低运行版本提高到 2.5.9，Windows 和 Linux 均使用官方 2.5.9 验证。
+- **按需兼容与防护**：新增语音检查和限流、Workshop 地图语音分流、换队限流和观察者残留活体修复；关闭 `sv_cheats` 时清除 noclip 状态，重生后不再继承飞行。
+- **按需原生修复与运维**：新增 Hammer ID 保留、CSTV 配额筛选、水中跳跃、单 tick 起跳上限、斜坡接缝、KeyValues 限流、赛末换图恢复和长图时钟刷新；通过 `sf_status` 查看可用性。
+- **Gamedata 维护**：按模块验证所需原生入口和指令，不再按整份引擎映像的构建身份停用修复。
+
+### English
+
+- **Paired dependencies**: Use S2SDK 3.4.2. Raise the minimum PolyHook runtime to 2.5.9; validate Windows and Linux against the official 2.5.9 release.
+- **Opt-in compatibility guards**: Add voice validation and rate limiting, Workshop map speaker separation, team-switch limits, and stale spectator pawn reconciliation. Disabling `sv_cheats` clears noclip so it does not carry over to a respawn.
+- **Opt-in native fixes and maintenance**: Add Hammer ID retention, CSTV bot quota exclusion, water jumping, one jump per tick, ramp seam handling, KeyValues rate limiting, match-end map recovery, and long-running map refresh. Check availability with `sf_status`.
+- **Gamedata maintenance**: Verify native entry points and instructions per module rather than requiring a whole engine image to match a fixed build identity.
+
+---
+
 ## [0.1.0] - Initial Standalone Release / 首个独立版本
 
 ### 简体中文

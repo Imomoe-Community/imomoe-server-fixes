@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/untrustedmodders/plugify/refs/heads/main/schemas/plugin.schema.json",
-  "version": "3.3.1",
+  "version": "3.4.2",
   "name": "s2sdk",
   "description": "Provides functionality for other plugins from Source 2 engine",
   "author": "untrustedmodders",
@@ -28,6 +28,113 @@
     }
   ],
   "methods": [
+    {
+      "name": "IsClientSourceTV",
+      "group": "Clients",
+      "description": "Checks if a certain player is the SourceTV bot.",
+      "funcName": "IsClientSourceTV",
+      "paramTypes": [
+        {
+          "name": "playerSlot",
+          "type": "int32",
+          "ref": false,
+          "description": "The index of the player's slot."
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "true if the client is the SourceTV bot, false otherwise."
+      }
+    },
+    {
+      "name": "GetConVarFloat",
+      "group": "Cvars",
+      "description": "Retrieves the current value of a float console variable.",
+      "funcName": "GetConVarFloat",
+      "paramTypes": [
+        {
+          "name": "conVarHandle",
+          "type": "uint64",
+          "ref": false,
+          "description": "The handle to the console variable data."
+        }
+      ],
+      "retType": {
+        "type": "float",
+        "description": "The current float value of the console variable."
+      }
+    },
+    {
+      "name": "SetConVarFloat",
+      "group": "Cvars",
+      "description": "Sets the value of a floating-point console variable.",
+      "funcName": "SetConVarFloat",
+      "paramTypes": [
+        {
+          "name": "conVarHandle",
+          "type": "uint64",
+          "ref": false,
+          "description": "The handle to the console variable data."
+        },
+        {
+          "name": "value",
+          "type": "float",
+          "ref": false,
+          "description": "The value to set for the console variable."
+        },
+        {
+          "name": "replicate",
+          "type": "bool",
+          "ref": false,
+          "description": "If set to true, the new convar value will be set on all clients. This will only work if the convar has the FCVAR_REPLICATED flag and actually exists on clients."
+        },
+        {
+          "name": "notify",
+          "type": "bool",
+          "ref": false,
+          "description": "If set to true, clients will be notified that the convar has changed. This will only work if the convar has the FCVAR_NOTIFY flag."
+        }
+      ],
+      "retType": {
+        "type": "void"
+      }
+    },
+    {
+      "name": "ServerCommandEx",
+      "group": "Commands",
+      "description": "Executes a server command right away as if it were on the server console (or RCON) and returns the printed text. Console commands and convars only: commands are split on ';' and new lines, aliases are not expanded.",
+      "funcName": "ServerCommandEx",
+      "paramTypes": [
+        {
+          "name": "command",
+          "type": "string",
+          "ref": false,
+          "description": "The command to execute on the server."
+        }
+      ],
+      "retType": {
+        "type": "string",
+        "description": "String to store command result into."
+      }
+    },
+    {
+      "name": "IsMapValid",
+      "group": "Engine",
+      "description": "Returns whether a specified map is valid or not.",
+      "funcName": "IsMapValid",
+      "paramTypes": [
+        {
+          "name": "mapname",
+          "type": "string",
+          "ref": false,
+          "description": "The name of the map to check for validity."
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "True if the map is valid, false otherwise."
+      }
+    },
     {
       "name": "PlayerSlotToEntHandle",
       "group": "Clients",
@@ -3720,6 +3827,391 @@
         "type": "string",
         "description": "A reference to a string where the game directory path will be stored."
       }
+    },
+    {
+      "name": "CreateConVarInt32",
+      "group": "Cvars",
+      "description": "Creates a new 32-bit signed integer console variable.",
+      "funcName": "CreateConVarInt32",
+      "paramTypes": [
+        {
+          "name": "name",
+          "type": "string",
+          "ref": false,
+          "description": "The name of the console variable."
+        },
+        {
+          "name": "defaultValue",
+          "type": "int32",
+          "ref": false,
+          "description": "The default value for the console variable."
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "ref": false,
+          "description": "A brief description of the console variable."
+        },
+        {
+          "name": "flags",
+          "type": "int64",
+          "ref": false,
+          "description": "Flags that define the behavior of the console variable.",
+          "enum": "ConVarFlag"
+        },
+        {
+          "name": "hasMin",
+          "type": "bool",
+          "ref": false,
+          "description": "Indicates if a minimum value is provided."
+        },
+        {
+          "name": "min",
+          "type": "int32",
+          "ref": false,
+          "description": "The minimum value if hasMin is true."
+        },
+        {
+          "name": "hasMax",
+          "type": "bool",
+          "ref": false,
+          "description": "Indicates if a maximum value is provided."
+        },
+        {
+          "name": "max",
+          "type": "int32",
+          "ref": false,
+          "description": "The maximum value if hasMax is true."
+        }
+      ],
+      "retType": {
+        "type": "uint64",
+        "description": "A handle to the created console variable data."
+      }
+    },
+    {
+      "name": "GetConVarBool",
+      "group": "Cvars",
+      "description": "Retrieves the current value of a boolean console variable.",
+      "funcName": "GetConVarBool",
+      "paramTypes": [
+        {
+          "name": "conVarHandle",
+          "type": "uint64",
+          "ref": false,
+          "description": "The handle to the console variable data."
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "The current boolean value of the console variable."
+      }
+    },
+    {
+      "name": "GetConVarInt32",
+      "group": "Cvars",
+      "description": "Retrieves the current value of a signed 32-bit integer console variable.",
+      "funcName": "GetConVarInt32",
+      "paramTypes": [
+        {
+          "name": "conVarHandle",
+          "type": "uint64",
+          "ref": false,
+          "description": "The handle to the console variable data."
+        }
+      ],
+      "retType": {
+        "type": "int32",
+        "description": "The current int32_t value of the console variable."
+      }
+    },
+    {
+      "name": "HookClientVoiceData",
+      "group": "Voice",
+      "description": "Hooks every voice packet a client sends, before the engine passes it on. The packet can be changed or blocked.",
+      "funcName": "HookClientVoiceData",
+      "paramTypes": [
+        {
+          "name": "callback",
+          "type": "function",
+          "ref": false,
+          "description": "The callback function to invoke.",
+          "prototype": "ClientVoiceDataHookCallback"
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "True if the hook was successfully added, false otherwise."
+      }
+    },
+    {
+      "name": "UnhookClientVoiceData",
+      "group": "Voice",
+      "description": "Unhooks a previously hooked callback from HookClientVoiceData.",
+      "funcName": "UnhookClientVoiceData",
+      "paramTypes": [
+        {
+          "name": "callback",
+          "type": "function",
+          "ref": false,
+          "description": "The callback function to remove.",
+          "prototype": "ClientVoiceDataHookCallback"
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "True if the hook was successfully removed, false otherwise."
+      }
+    },
+    {
+      "name": "VoiceDataGetAudio",
+      "group": "Voice",
+      "description": "Gets the compressed audio of a voice packet.",
+      "funcName": "VoiceDataGetAudio",
+      "paramTypes": [
+        {
+          "name": "voiceData",
+          "type": "ptr64",
+          "ref": false,
+          "description": "The voice packet from HookClientVoiceData."
+        }
+      ],
+      "retType": {
+        "type": "uint8[]",
+        "description": "The compressed audio bytes."
+      }
+    },
+    {
+      "name": "VoiceDataGetNumPackets",
+      "group": "Voice",
+      "description": "Gets the number of codec packets in a voice packet.",
+      "funcName": "VoiceDataGetNumPackets",
+      "paramTypes": [
+        {
+          "name": "voiceData",
+          "type": "ptr64",
+          "ref": false,
+          "description": "The voice packet from HookClientVoiceData."
+        }
+      ],
+      "retType": {
+        "type": "uint32",
+        "description": "The number of codec packets."
+      }
+    },
+    {
+      "name": "VoiceDataGetPacketOffsets",
+      "group": "Voice",
+      "description": "Gets the offsets of the codec packets inside the audio of a voice packet.",
+      "funcName": "VoiceDataGetPacketOffsets",
+      "paramTypes": [
+        {
+          "name": "voiceData",
+          "type": "ptr64",
+          "ref": false,
+          "description": "The voice packet from HookClientVoiceData."
+        }
+      ],
+      "retType": {
+        "type": "uint32[]",
+        "description": "The packet offsets in bytes."
+      }
+    },
+    {
+      "name": "HookConVarChange",
+      "group": "Cvars",
+      "description": "Creates a hook for when a console variable's value is changed.",
+      "funcName": "HookConVarChange",
+      "paramTypes": [
+        {
+          "name": "conVarHandle",
+          "type": "uint64",
+          "ref": false,
+          "description": "TThe handle to the console variable data."
+        },
+        {
+          "name": "callback",
+          "type": "function",
+          "ref": false,
+          "description": "The callback function to be executed when the variable's value changes.",
+          "prototype": "ConVarCallback"
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "True if the callback was registered, false if the convar is invalid or the callback is already registered."
+      }
+    },
+    {
+      "name": "UnhookConVarChange",
+      "group": "Cvars",
+      "description": "Removes a hook for when a console variable's value is changed.",
+      "funcName": "UnhookConVarChange",
+      "paramTypes": [
+        {
+          "name": "conVarHandle",
+          "type": "uint64",
+          "ref": false,
+          "description": "The handle to the console variable data."
+        },
+        {
+          "name": "callback",
+          "type": "function",
+          "ref": false,
+          "description": "The callback function to be removed.",
+          "prototype": "ConVarCallback"
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "True if the callback was removed, false if the convar is invalid or the callback was not registered."
+      }
+    },
+    {
+      "name": "GetCurrentWorkshopMap",
+      "group": "Addons",
+      "description": "Retrieves the workshop ID of the current map.",
+      "funcName": "GetCurrentWorkshopMap",
+      "paramTypes": [],
+      "retType": {
+        "type": "uint64",
+        "description": "The workshop ID of the current map, or 0 if the current map is not a workshop map."
+      }
+    },
+    {
+      "name": "IsClientConnected",
+      "group": "Clients",
+      "description": "Checks if a certain player is connected.",
+      "funcName": "IsClientConnected",
+      "paramTypes": [
+        {
+          "name": "playerSlot",
+          "type": "int32",
+          "ref": false,
+          "description": "The index of the player's slot."
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "true if the player is connected, false otherwise."
+      }
+    },
+    {
+      "name": "GetEntityTeam",
+      "group": "Entities",
+      "description": "Retrieves the team number of an entity.",
+      "funcName": "GetEntityTeam",
+      "paramTypes": [
+        {
+          "name": "entityHandle",
+          "type": "int32",
+          "ref": false,
+          "description": "The handle of the entity whose team number is to be retrieved."
+        }
+      ],
+      "retType": {
+        "type": "int32",
+        "description": "The team number of the entity, or 0 if the entity is invalid.",
+        "enum": "CSTeam"
+      }
+    },
+    {
+      "name": "HookSendNetMessage",
+      "group": "Protobuf",
+      "description": "Hooks every net message sent to a single client, allowing to block it for that client.",
+      "funcName": "HookSendNetMessage",
+      "paramTypes": [
+        {
+          "name": "callback",
+          "type": "function",
+          "ref": false,
+          "description": "The callback function to invoke before the message is sent.",
+          "prototype": "SendNetMessageHookCallback"
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "True if the hook was successfully added, false otherwise."
+      }
+    },
+    {
+      "name": "UnhookSendNetMessage",
+      "group": "Protobuf",
+      "description": "Unhooks a previously hooked callback from HookSendNetMessage.",
+      "funcName": "UnhookSendNetMessage",
+      "paramTypes": [
+        {
+          "name": "callback",
+          "type": "function",
+          "ref": false,
+          "description": "The callback function to remove.",
+          "prototype": "SendNetMessageHookCallback"
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "True if the hook was successfully removed, false otherwise."
+      }
+    },
+    {
+      "name": "PbGetInt32",
+      "group": "Protobuf",
+      "description": "Gets a 32-bit integer value from a field in the UserMessage.",
+      "funcName": "PbGetInt32",
+      "paramTypes": [
+        {
+          "name": "userMessage",
+          "type": "ptr64",
+          "ref": false,
+          "description": "The UserMessage instance."
+        },
+        {
+          "name": "fieldName",
+          "type": "string",
+          "ref": false,
+          "description": "The name of the field."
+        },
+        {
+          "name": "out",
+          "type": "int32",
+          "ref": true,
+          "description": "The output value."
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "True if the field was successfully retrieved, false otherwise."
+      }
+    },
+    {
+      "name": "PbSetUInt64",
+      "group": "Protobuf",
+      "description": "Sets an unsigned 64-bit integer value for a field in the UserMessage.",
+      "funcName": "PbSetUInt64",
+      "paramTypes": [
+        {
+          "name": "userMessage",
+          "type": "ptr64",
+          "ref": false,
+          "description": "The UserMessage instance."
+        },
+        {
+          "name": "fieldName",
+          "type": "string",
+          "ref": false,
+          "description": "The name of the field."
+        },
+        {
+          "name": "value",
+          "type": "uint64",
+          "ref": false,
+          "description": "The value to set."
+        }
+      ],
+      "retType": {
+        "type": "bool",
+        "description": "True if the field was successfully set, false otherwise."
+      }
     }
   ],
   "classes": [],
@@ -3847,6 +4339,78 @@
       "retType": {
         "type": "void",
         "description": ""
+      }
+    },
+    {
+      "name": "ClientVoiceDataHookCallback",
+      "funcName": "ClientVoiceDataHookCallback",
+      "description": "Callback function for voice packets sent by clients. Runs after the Speak_Muted check, so packets of muted players don't reach it.",
+      "paramTypes": [
+        {
+          "name": "playerSlot",
+          "type": "int32",
+          "description": "The slot of the player who talks."
+        },
+        {
+          "name": "voiceData",
+          "type": "ptr64",
+          "ref": false,
+          "description": "The voice packet, valid only during the callback."
+        }
+      ],
+      "retType": {
+        "type": "int32",
+        "description": "Handled or Stop blocks the packet for everyone, Stop also skips the remaining callbacks.",
+        "enum": "ResultType"
+      }
+    },
+    {
+      "name": "ConVarCallback",
+      "funcName": "ConVarCallback",
+      "description": "Handles changes to a console variable's value. This function is called whenever the value of a specific console variable is modified.",
+      "paramTypes": [
+        {
+          "name": "conVarHandle",
+          "type": "uint64",
+          "description": "A handle to the console variable that is being changed. This provides access to the variable's metadata and current state."
+        },
+        {
+          "name": "newValue",
+          "type": "string",
+          "description": "The new value being assigned to the console variable. This string contains the updated value after the change."
+        },
+        {
+          "name": "oldValue",
+          "type": "string",
+          "description": "The previous value of the console variable before the change. This string contains the value that was overridden."
+        }
+      ],
+      "retType": {
+        "type": "void",
+        "description": "This function does not return a value. It performs any necessary processing related to the value change directly."
+      }
+    },
+    {
+      "name": "SendNetMessageHookCallback",
+      "funcName": "SendNetMessageHookCallback",
+      "description": "Callback function for net messages sent to a single client. Runs before OnSendNetMessage, blocked messages don't reach it.",
+      "paramTypes": [
+        {
+          "name": "playerSlot",
+          "type": "int32",
+          "description": "The slot of the client the message is sent to."
+        },
+        {
+          "name": "message",
+          "type": "ptr64",
+          "ref": false,
+          "description": "The user message."
+        }
+      ],
+      "retType": {
+        "type": "int32",
+        "description": "Handled or Stop blocks the message for this client, Stop also skips the remaining callbacks.",
+        "enum": "ResultType"
       }
     }
   ],

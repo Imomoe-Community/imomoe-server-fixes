@@ -471,4 +471,17 @@ namespace s2sdk {
     return __s2sdk_GetEntityEyeAngles(entityHandle);
   }
 
+  using _GetEntityTeam = CSTeam (*)(int32_t);
+}
+extern "C" PLUGIN_API s2sdk::_GetEntityTeam __s2sdk_GetEntityTeam;
+namespace s2sdk {
+  /**
+   * @brief Retrieves the team number of an entity.
+   * @param entityHandle (int32): The handle of the entity whose team number is to be retrieved.
+   * @return int32: The team number of the entity, or 0 if the entity is invalid.
+   */
+  inline CSTeam GetEntityTeam(int32_t entityHandle) {
+    return __s2sdk_GetEntityTeam(entityHandle);
+  }
+
 } // namespace s2sdk

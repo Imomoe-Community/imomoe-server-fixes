@@ -11,7 +11,7 @@
 
 namespace imomoe::server_fixes::game_ban_fix {
 
-// Build 26445667: the GC penalty notification supplies the reason, duration
+// The GC penalty notification supplies the reason, duration
 // and two account flags. A separate connection path supplies the second timer.
 struct GcBan {
 	std::uint32_t reason{};

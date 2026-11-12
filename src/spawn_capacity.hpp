@@ -13,6 +13,7 @@ struct Status {
 };
 
 Status Update( bool enabled, bool includeDiagnostics = false ) noexcept;
+bool ObservesJoinCommands() noexcept;
 bool Shutdown() noexcept;
 
 } // namespace imomoe::server_fixes::spawn_capacity

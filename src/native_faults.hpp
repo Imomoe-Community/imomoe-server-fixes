@@ -5,14 +5,16 @@
 
 namespace imomoe::server_fixes::native_faults {
 
-enum class Fix { Beam, Filter, Equip, FreeClient, Count };
+enum class Fix { Beam, Filter, Equip, FreeClient, HammerId, CstvBotQuota, WaterJump, JumpSpam, KeyValues, BlankMap, SlowAnimation, RampBug, Count };
 
 struct Status {
 	bool available;
 	const char* reason;
 };
 
-Status Update( Fix fix, bool enabled ) noexcept;
+void Init() noexcept;
+Status Update( Fix fix, bool enabled, bool mapReady ) noexcept;
+void OnMapEnd() noexcept;
 bool Shutdown() noexcept;
 
 } // namespace imomoe::server_fixes::native_faults

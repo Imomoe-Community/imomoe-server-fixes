@@ -6,6 +6,7 @@
 #include "s2sdk/enums.hpp"
 #include "s2sdk/aliases.hpp"
 #include "s2sdk/delegates.hpp"
+#include "s2sdk/addons.hpp"
 #include "s2sdk/clients.hpp"
 #include "s2sdk/commands.hpp"
 #include "s2sdk/console.hpp"
@@ -20,4 +21,5 @@
 #include "s2sdk/protobuf.hpp"
 #include "s2sdk/schema.hpp"
 #include "s2sdk/transmit.hpp"
+#include "s2sdk/voice.hpp"
 #include "s2sdk/weapons.hpp"

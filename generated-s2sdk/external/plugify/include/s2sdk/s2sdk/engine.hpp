@@ -9,6 +9,19 @@
 
 namespace s2sdk {
 
+  using _IsMapValid = bool (*)(const plg::string&);
+}
+extern "C" PLUGIN_API s2sdk::_IsMapValid __s2sdk_IsMapValid;
+namespace s2sdk {
+  /**
+   * @brief Returns whether a specified map is valid or not.
+   * @param mapname (string): The name of the map to check for validity.
+   * @return bool: True if the map is valid, false otherwise.
+   */
+  inline bool IsMapValid(const plg::string& mapname) {
+    return __s2sdk_IsMapValid(mapname);
+  }
+
   using _GetGameTickCount = int32_t (*)();
 }
 extern "C" PLUGIN_API s2sdk::_GetGameTickCount __s2sdk_GetGameTickCount;

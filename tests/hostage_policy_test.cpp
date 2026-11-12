@@ -66,18 +66,19 @@ int main() {
 		"a detoured pawn body with an inner Pre Supercede is uncertain, so its reached callsite cannot trigger fallback" );
 	Check( ledger.Size() == 0, "inner body Supercede submits no rescue input" );
 
-	alignas( std::uintptr_t ) std::array<std::byte, 16> dispatchArgument{};
+	constexpr std::size_t dispatchOffset = 16;
+	alignas( std::uintptr_t ) std::array<std::byte, dispatchOffset + sizeof( void* )> dispatchArgument{};
 	std::int32_t dispatchHandle = 0x71234567;
 	void* handleStorage = &dispatchHandle;
-	std::memcpy( dispatchArgument.data() + 8, &handleStorage, sizeof( handleStorage ) );
+	std::memcpy( dispatchArgument.data() + dispatchOffset, &handleStorage, sizeof( handleStorage ) );
 	std::int32_t decodedHandle{};
-	Check( ReadHostageDispatchTarget( dispatchArgument.data(), decodedHandle ) && decodedHandle == dispatchHandle,
+	Check( ReadHostageDispatchTarget( dispatchArgument.data(), dispatchOffset, decodedHandle ) && decodedHandle == dispatchHandle,
 		"the checked dispatch reader copies a readable full entity handle" );
-	Check( !ReadHostageDispatchTarget( reinterpret_cast<const void*>( std::uintptr_t{ 1 } ), decodedHandle ),
+	Check( !ReadHostageDispatchTarget( reinterpret_cast<const void*>( std::uintptr_t{ 1 } ), dispatchOffset, decodedHandle ),
 		"a dispatch argument below the user address range is rejected" );
 	void* unreadableHandleStorage = reinterpret_cast<void*>( std::uintptr_t{ 1 } );
-	std::memcpy( dispatchArgument.data() + 8, &unreadableHandleStorage, sizeof( unreadableHandleStorage ) );
-	Check( !ReadHostageDispatchTarget( dispatchArgument.data(), decodedHandle ),
+	std::memcpy( dispatchArgument.data() + dispatchOffset, &unreadableHandleStorage, sizeof( unreadableHandleStorage ) );
+	Check( !ReadHostageDispatchTarget( dispatchArgument.data(), dispatchOffset, decodedHandle ),
 		"a nested pointer below the user address range is rejected" );
 	Check( IsMatchingHostageTarget( Key(), 80 ), "the Hostage API target handle matches this carried hostage" );
 	Check( !IsMatchingHostageTarget( Key(), 81 ) && !IsMatchingHostageTarget( Key(), -1 ),

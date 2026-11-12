@@ -98,7 +98,7 @@ struct MapLifecycle {
 	}
 };
 
-// Build 26334290 jointeam_failed reasons: team capacity is 2/3; mp_limitteams is 7/8.
+// The engine reports separate reasons for full-team and mp_limitteams failures.
 inline constexpr std::int32_t kFailureTerroristFull = 2;
 inline constexpr std::int32_t kFailureCounterTerroristFull = 3;
 inline constexpr std::int32_t kFailureTerroristLimit = 7;

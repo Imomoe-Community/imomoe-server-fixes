@@ -66,6 +66,14 @@ function(server_fixes_apply_paired_sourcesdk target)
 	if(NOT SERVER_FIXES_TIER0_PERPROJECT_LIBRARY)
 		message(FATAL_ERROR "The matching SourceSDK build must contain its static tier0_perproject library for CCommand")
 	endif()
+	find_library(SERVER_FIXES_MATH_LIBRARY NAMES math
+		HINTS
+			"${SERVER_FIXES_SOURCE_SDK_BUILD_DIR}/external/sourcesdk"
+			"${SERVER_FIXES_SOURCE_SDK_BUILD_DIR}/external/sourcesdk/Release"
+		NO_DEFAULT_PATH)
+	if(NOT SERVER_FIXES_MATH_LIBRARY)
+		message(FATAL_ERROR "The matching SourceSDK build must contain its static math library for CGameTrace")
+	endif()
 	target_include_directories(${target} SYSTEM PRIVATE ${source_sdk_include_dirs})
 	if(MSVC)
 		set_target_properties(${target} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -87,7 +95,8 @@ function(server_fixes_apply_paired_sourcesdk target)
 		)
 		target_link_options(${target} PRIVATE -static-libstdc++ -static-libgcc)
 	endif()
-	target_link_libraries(${target} PRIVATE "${SERVER_FIXES_TIER0_PERPROJECT_LIBRARY}" "${SERVER_FIXES_TIER0_LIBRARY}")
+	target_link_libraries(${target} PRIVATE "${SERVER_FIXES_MATH_LIBRARY}"
+		"${SERVER_FIXES_TIER0_PERPROJECT_LIBRARY}" "${SERVER_FIXES_TIER0_LIBRARY}" ${CMAKE_DL_LIBS})
 endfunction()
 
 function(server_fixes_add_policy_test target test_name source_file)
@@ -109,6 +118,9 @@ if(SERVER_FIXES_POLICY_TESTS_ONLY)
 	server_fixes_add_policy_test(server_fixes_hostage_policy_test server_fixes_hostage_policy tests/hostage_policy_test.cpp)
 	server_fixes_add_policy_test(server_fixes_spawn_capacity_policy_test server_fixes_spawn_capacity_policy tests/spawn_capacity_policy_test.cpp)
 	server_fixes_add_policy_test(server_fixes_spectator_compat_policy_test server_fixes_spectator_compat_policy tests/spectator_compat_policy_test.cpp)
+	server_fixes_add_policy_test(server_fixes_compat_guard_policy_test server_fixes_compat_guard_policy tests/compat_guard_policy_test.cpp)
+	server_fixes_add_policy_test(server_fixes_map_maintenance_policy_test server_fixes_map_maintenance_policy tests/map_maintenance_policy_test.cpp)
+	server_fixes_add_policy_test(server_fixes_ramp_policy_test server_fixes_ramp_policy tests/ramp_policy_test.cpp)
 	if(SERVER_FIXES_CALLBACK_TESTS)
 		foreach(required_var SERVER_FIXES_PLUGIFY_INCLUDE_DIR SERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR
 			SERVER_FIXES_SOURCE_SDK_PUBLIC_INCLUDE_DIR SERVER_FIXES_SOURCE_SDK_BUILD_DIR SERVER_FIXES_SOURCE_SDK_LIBRARY_DIR
@@ -144,9 +156,10 @@ if(SERVER_FIXES_POLICY_TESTS_ONLY)
 		endfunction()
 
 		server_fixes_add_callback_test(server_fixes_spawn_capacity_callback_test server_fixes_spawn_capacity_callbacks
-			tests/spawn_capacity_callback_test.cpp src/hostage_compat.cpp src/runtime_lifecycle.cpp)
+			tests/spawn_capacity_callback_test.cpp src/hostage_compat.cpp src/runtime_lifecycle.cpp src/compat_guards.cpp)
 		server_fixes_add_callback_test(server_fixes_game_ban_fix_callback_test server_fixes_game_ban_fix_callbacks tests/game_ban_fix_callback_test.cpp)
-		server_fixes_add_callback_test(server_fixes_native_faults_callback_test server_fixes_native_faults_callbacks tests/native_faults_callback_test.cpp)
+		server_fixes_add_callback_test(server_fixes_native_faults_callback_test server_fixes_native_faults_callbacks
+			tests/native_faults_callback_test.cpp src/ramp_movement.cpp)
 	endif()
 	return()
 endif()
@@ -166,8 +179,11 @@ endif()
 
 add_library(imomoe-server-fixes SHARED
 	src/plugin.cpp
+	src/compat_guards.cpp
 	src/game_ban_fix.cpp
+	src/map_maintenance.cpp
 	src/native_faults.cpp
+	src/ramp_movement.cpp
 	src/runtime_lifecycle.cpp
 	src/hostage_compat.cpp
 	src/spawn_capacity.cpp

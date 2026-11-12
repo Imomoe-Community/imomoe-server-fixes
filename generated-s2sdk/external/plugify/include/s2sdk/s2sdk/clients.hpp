@@ -9,6 +9,19 @@
 
 namespace s2sdk {
 
+  using _IsClientSourceTV = bool (*)(int32_t);
+}
+extern "C" PLUGIN_API s2sdk::_IsClientSourceTV __s2sdk_IsClientSourceTV;
+namespace s2sdk {
+  /**
+   * @brief Checks if a certain player is the SourceTV bot.
+   * @param playerSlot (int32): The index of the player's slot.
+   * @return bool: true if the client is the SourceTV bot, false otherwise.
+   */
+  inline bool IsClientSourceTV(int32_t playerSlot) {
+    return __s2sdk_IsClientSourceTV(playerSlot);
+  }
+
   using _PlayerSlotToEntHandle = int32_t (*)(int32_t);
 }
 extern "C" PLUGIN_API s2sdk::_PlayerSlotToEntHandle __s2sdk_PlayerSlotToEntHandle;
@@ -503,6 +516,19 @@ namespace s2sdk {
    */
   inline void ChangeClientTeam(int32_t playerSlot, CSTeam team) {
     return __s2sdk_ChangeClientTeam(playerSlot, team);
+  }
+
+  using _IsClientConnected = bool (*)(int32_t);
+}
+extern "C" PLUGIN_API s2sdk::_IsClientConnected __s2sdk_IsClientConnected;
+namespace s2sdk {
+  /**
+   * @brief Checks if a certain player is connected.
+   * @param playerSlot (int32): The index of the player's slot.
+   * @return bool: true if the player is connected, false otherwise.
+   */
+  inline bool IsClientConnected(int32_t playerSlot) {
+    return __s2sdk_IsClientConnected(playerSlot);
   }
 
 } // namespace s2sdk

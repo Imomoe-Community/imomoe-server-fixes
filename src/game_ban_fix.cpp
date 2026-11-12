@@ -152,7 +152,7 @@ const char* Attach() {
 	}
 	const auto image = LocateServerImage();
 	if ( !image.ok ) {
-		return "unsupported or unloaded server image (requires CS2 Build 26445667)";
+		return "server image unavailable";
 	}
 	g_cooldown = s2sdk::FindConVar( plg::string( "sv_kick_players_with_cooldown" ) );
 	if ( !g_cooldown ) {

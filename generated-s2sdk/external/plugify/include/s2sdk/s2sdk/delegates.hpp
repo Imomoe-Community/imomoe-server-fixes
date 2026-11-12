@@ -34,4 +34,16 @@ namespace s2sdk {
   using OnMapEndCallback = void (*)();
 
 
+  // Callback function for voice packets sent by clients. Runs after the Speak_Muted check, so packets of muted players don't reach it.
+  using ClientVoiceDataHookCallback = ResultType (*)(int32_t, void*);
+
+
+  // Handles changes to a console variable's value. This function is called whenever the value of a specific console variable is modified.
+  using ConVarCallback = void (*)(uint64_t, const plg::string&, const plg::string&);
+
+
+  // Callback function for net messages sent to a single client. Runs before OnSendNetMessage, blocked messages don't reach it.
+  using SendNetMessageHookCallback = ResultType (*)(int32_t, void*);
+
+
 } // namespace s2sdk

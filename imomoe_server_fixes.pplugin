@@ -16,7 +16,7 @@
     },
     {
       "name": "polyhook",
-      "constraints": ">=2.5.7"
+      "constraints": ">=2.5.9"
     }
   ],
   "methods": [

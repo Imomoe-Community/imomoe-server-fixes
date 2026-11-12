@@ -1,5 +1,15 @@
 #include "s2sdk.hpp"
 
+s2sdk::_IsClientSourceTV __s2sdk_IsClientSourceTV = nullptr;
+
+s2sdk::_GetConVarFloat __s2sdk_GetConVarFloat = nullptr;
+
+s2sdk::_SetConVarFloat __s2sdk_SetConVarFloat = nullptr;
+
+s2sdk::_ServerCommandEx __s2sdk_ServerCommandEx = nullptr;
+
+s2sdk::_IsMapValid __s2sdk_IsMapValid = nullptr;
+
 s2sdk::_PlayerSlotToEntHandle __s2sdk_PlayerSlotToEntHandle = nullptr;
 
 s2sdk::_IsClientInGame __s2sdk_IsClientInGame = nullptr;
@@ -321,4 +331,38 @@ s2sdk::_FakeClientCommand __s2sdk_FakeClientCommand = nullptr;
 s2sdk::_GetCurrentMap __s2sdk_GetCurrentMap = nullptr;
 
 s2sdk::_GetGameDirectory __s2sdk_GetGameDirectory = nullptr;
+
+s2sdk::_CreateConVarInt32 __s2sdk_CreateConVarInt32 = nullptr;
+
+s2sdk::_GetConVarBool __s2sdk_GetConVarBool = nullptr;
+
+s2sdk::_GetConVarInt32 __s2sdk_GetConVarInt32 = nullptr;
+
+s2sdk::_HookClientVoiceData __s2sdk_HookClientVoiceData = nullptr;
+
+s2sdk::_UnhookClientVoiceData __s2sdk_UnhookClientVoiceData = nullptr;
+
+s2sdk::_VoiceDataGetAudio __s2sdk_VoiceDataGetAudio = nullptr;
+
+s2sdk::_VoiceDataGetNumPackets __s2sdk_VoiceDataGetNumPackets = nullptr;
+
+s2sdk::_VoiceDataGetPacketOffsets __s2sdk_VoiceDataGetPacketOffsets = nullptr;
+
+s2sdk::_HookConVarChange __s2sdk_HookConVarChange = nullptr;
+
+s2sdk::_UnhookConVarChange __s2sdk_UnhookConVarChange = nullptr;
+
+s2sdk::_GetCurrentWorkshopMap __s2sdk_GetCurrentWorkshopMap = nullptr;
+
+s2sdk::_IsClientConnected __s2sdk_IsClientConnected = nullptr;
+
+s2sdk::_GetEntityTeam __s2sdk_GetEntityTeam = nullptr;
+
+s2sdk::_HookSendNetMessage __s2sdk_HookSendNetMessage = nullptr;
+
+s2sdk::_UnhookSendNetMessage __s2sdk_UnhookSendNetMessage = nullptr;
+
+s2sdk::_PbGetInt32 __s2sdk_PbGetInt32 = nullptr;
+
+s2sdk::_PbSetUInt64 __s2sdk_PbSetUInt64 = nullptr;
 

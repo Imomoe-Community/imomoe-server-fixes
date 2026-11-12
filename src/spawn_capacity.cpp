@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "spawn_capacity.hpp"
+#include "compat_guards.hpp"
 #include "server_fixes_gamedata.hpp"
 #include "runtime_lifecycle.hpp"
 
@@ -314,7 +315,7 @@ bool ReadNativeTeamCapacities( std::array<NativeTeamCapacity, 2>& capacities, st
 			counterTerroristSpawnPoints < 0 || counterTerroristSpawnPoints > kMaxInt ||
 			maxTerrorists < 0 || maxTerrorists > kMaxInt ||
 			maxCounterTerrorists < 0 || maxCounterTerrorists > kMaxInt ) {
-			error = "Build 26445667 native spawn capacity fields returned an invalid value";
+			error = "paired native spawn capacity fields returned an invalid value";
 			return false;
 		}
 		capacities = {
@@ -700,7 +701,7 @@ std::string_view ClassnameFor( Team team ) noexcept {
 	return team == Team::Terrorist ? "info_player_terrorist" : "info_player_counterterrorist";
 }
 
-// Read-only Build 26445667 primary-vector layout, verified in both native
+// Read-only primary-vector layout, verified in both native
 // registration helpers. Capacity counts remain exclusively engine-produced.
 struct NativeSpawnList {
 	std::int32_t count{};
@@ -2466,7 +2467,7 @@ s2sdk::ResultType OnSpawnSaveCommand( std::int32_t slot, s2sdk::ConCommandContex
 	return s2sdk::ResultType::Handled;
 }
 
-s2sdk::ResultType OnJoinCommandPre( std::int32_t slot, s2sdk::ConCommandContext,
+s2sdk::ResultType OnJoinCommandPre( std::int32_t slot, s2sdk::ConCommandContext context,
 	const plg::vector<plg::string>& arguments ) noexcept {
 	try {
 		if ( arguments.empty() || !EqualsAsciiCaseInsensitive( View( arguments.front() ), kJoinTeamCommand ) ) {
@@ -2476,6 +2477,10 @@ s2sdk::ResultType OnJoinCommandPre( std::int32_t slot, s2sdk::ConCommandContext,
 			return s2sdk::ResultType::Continue;
 		}
 		const auto index = static_cast<std::size_t>( slot );
+		if ( !g_retryDispatchActive[index] && context == s2sdk::ConCommandContext::Console &&
+			!compat_guards::AllowTeamSwitch( slot ) ) {
+			return s2sdk::ResultType::Stop;
+		}
 		auto& epoch = g_joinEpochs[index];
 		const auto requestGeneration = epoch.BeginRequest();
 		g_joinAttempts[index].reset();
@@ -2711,6 +2716,10 @@ void SetModuleReason( std::string reason ) noexcept {
 }
 
 } // namespace
+
+bool ObservesJoinCommands() noexcept {
+	return g_joinPreRegistered;
+}
 
 Status Update( bool enabled, bool includeDiagnostics ) noexcept {
 	try {

@@ -228,4 +228,60 @@ namespace s2sdk {
     return __s2sdk_PbAddString(userMessage, fieldName, value);
   }
 
+  using _HookSendNetMessage = bool (*)(SendNetMessageHookCallback);
+}
+extern "C" PLUGIN_API s2sdk::_HookSendNetMessage __s2sdk_HookSendNetMessage;
+namespace s2sdk {
+  /**
+   * @brief Hooks every net message sent to a single client, allowing to block it for that client.
+   * @param callback (function): The callback function to invoke before the message is sent.
+   * @return bool: True if the hook was successfully added, false otherwise.
+   */
+  inline bool HookSendNetMessage(SendNetMessageHookCallback callback) {
+    return __s2sdk_HookSendNetMessage(callback);
+  }
+
+  using _UnhookSendNetMessage = bool (*)(SendNetMessageHookCallback);
+}
+extern "C" PLUGIN_API s2sdk::_UnhookSendNetMessage __s2sdk_UnhookSendNetMessage;
+namespace s2sdk {
+  /**
+   * @brief Unhooks a previously hooked callback from HookSendNetMessage.
+   * @param callback (function): The callback function to remove.
+   * @return bool: True if the hook was successfully removed, false otherwise.
+   */
+  inline bool UnhookSendNetMessage(SendNetMessageHookCallback callback) {
+    return __s2sdk_UnhookSendNetMessage(callback);
+  }
+
+  using _PbGetInt32 = bool (*)(void*, const plg::string&, int32_t&);
+}
+extern "C" PLUGIN_API s2sdk::_PbGetInt32 __s2sdk_PbGetInt32;
+namespace s2sdk {
+  /**
+   * @brief Gets a 32-bit integer value from a field in the UserMessage.
+   * @param userMessage (ptr64): The UserMessage instance.
+   * @param fieldName (string): The name of the field.
+   * @param out (int32&): The output value.
+   * @return bool: True if the field was successfully retrieved, false otherwise.
+   */
+  inline bool PbGetInt32(void* userMessage, const plg::string& fieldName, int32_t& out) {
+    return __s2sdk_PbGetInt32(userMessage, fieldName, out);
+  }
+
+  using _PbSetUInt64 = bool (*)(void*, const plg::string&, uint64_t);
+}
+extern "C" PLUGIN_API s2sdk::_PbSetUInt64 __s2sdk_PbSetUInt64;
+namespace s2sdk {
+  /**
+   * @brief Sets an unsigned 64-bit integer value for a field in the UserMessage.
+   * @param userMessage (ptr64): The UserMessage instance.
+   * @param fieldName (string): The name of the field.
+   * @param value (uint64): The value to set.
+   * @return bool: True if the field was successfully set, false otherwise.
+   */
+  inline bool PbSetUInt64(void* userMessage, const plg::string& fieldName, uint64_t value) {
+    return __s2sdk_PbSetUInt64(userMessage, fieldName, value);
+  }
+
 } // namespace s2sdk

@@ -4,8 +4,8 @@
 #include "hostage_compat.hpp"
 
 #include "hostage_dispatch_read.hpp"
-#include "hostage_gate_patch.hpp"
 #include "hostage_policy.hpp"
+#include "owned_code_patch.hpp"
 #include "runtime_lifecycle.hpp"
 #include "server_fixes_gamedata.hpp"
 
@@ -81,7 +81,7 @@ thread_local std::array<TouchFrame, kMaxTouchDepth> g_touchFrames{};
 thread_local std::size_t g_touchDepth{};
 thread_local std::size_t g_touchOverflowDepth{};
 
-::hostage::GatePatch g_tTargetGate;
+OwnedCodePatch g_tTargetGate;
 bool g_tGateAttempted{};
 AttemptLedger g_attempts;
 std::vector<HookLease> g_hookLeases;
@@ -98,6 +98,7 @@ bool g_roundActive{};
 bool g_disconnectRegistered{};
 s2sdk::ConfigId g_gameConfig{};
 std::int32_t g_touchVTableOffset{-1};
+std::uintptr_t g_dispatchTargetOffset{};
 std::uint64_t g_enabledConVarHandle{};
 std::uint64_t g_onlyCtsConVar{};
 std::uint64_t g_gameTypeConVar{};
@@ -403,11 +404,44 @@ void ResolveTTargetGate( bool enabled ) noexcept {
 	g_tGateAttempted = true;
 	try {
 		if ( __s2sdk_CloseGameConfigFile && __s2sdk_GetGameConfigSignature && LoadGameConfig() ) {
-			(void)g_tTargetGate.configure( s2sdk::GetGameConfigSignature( g_gameConfig, "ServerFixes::HostageTeamGate" ) );
+			(void)g_tTargetGate.configure( s2sdk::GetGameConfigSignature( g_gameConfig, "ServerFixes::HostageTeamGate" ),
+				14, []( std::span<const std::uint8_t> code ) -> std::vector<std::uint8_t> {
+					// cmp byte ptr [reg+disp32], CT; jnz rel8 (Windows) or jz rel32 (Linux).
+					// Test the T bit and invert the condition without moving the branch.
+					const std::size_t rex = code[0] == 0x41 ? 1 : 0;
+					const auto cmp = code.subspan( rex );
+					const bool nearJump = cmp[7] == 0x0F && cmp[8] == 0x84;
+					if ( cmp[0] != 0x80 || cmp[1] != 0xBD || cmp[6] != 3 || ( !nearJump && cmp[7] != 0x75 ) ) {
+						return {};
+					}
+					const auto* begin = code.data();
+					std::vector<std::uint8_t> patched( begin, begin + rex + ( nearJump ? 13 : 9 ) );
+					patched[rex] = 0xF6; // TEST r/m8, imm8
+					patched[rex + 1] &= 0xC7; // Change the ModR/M extension from /7 to /0.
+					patched[rex + 6] = 2;
+					patched[rex + ( nearJump ? 8 : 7 )] ^= 1;
+					return patched;
+				} );
 		}
 	} catch ( ... ) {
 		// Leave only the T gate unavailable; CT observers resolve independently.
 	}
+}
+
+int ResolveDispatchTargetOffset() {
+	const int operand = s2sdk::GetGameConfigOffset( g_gameConfig, "ServerFixes::HostageDispatchTargetOperand" );
+	std::array<std::byte, 32> code{};
+	if ( operand < 3 || static_cast<std::size_t>( operand ) >= code.size() ||
+		!ReadServerCode( LocateServerImage(), g_hostageRescueHandler, std::span( code ).first( static_cast<std::size_t>( operand ) + 1 ) ) ) {
+		return 0;
+	}
+	const auto byte = [&]( int at ) { return std::to_integer<unsigned char>( code[static_cast<std::size_t>( at )] ); };
+	// The native handler loads the handle pointer with a MOV using disp8.
+	if ( ( byte( operand - 3 ) & 0xfe ) != 0x48 || byte( operand - 2 ) != 0x8b ||
+		( byte( operand - 1 ) & 0xc7 ) != 0x40 || byte( operand ) > 0x7f ) {
+		return 0;
+	}
+	return byte( operand );
 }
 
 bool ResolveBuildInputs() noexcept {
@@ -419,12 +453,14 @@ bool ResolveBuildInputs() noexcept {
 		g_touchVTableOffset = s2sdk::GetGameConfigOffset( g_gameConfig, plg::string( "CBaseEntity::Touch" ) );
 		g_hostageRescueHandler = s2sdk::GetGameConfigSignature( g_gameConfig,
 			plg::string( "ServerFixes::HostageOnRescueZoneTouch" ) );
+		const auto dispatchTargetOffset = ResolveDispatchTargetOffset();
 		g_pawnRescueMarker = s2sdk::GetGameConfigSignature( g_gameConfig, "ServerFixes::PawnRescueBeforeBodyCall" );
 		g_pawnRescueBody = s2sdk::GetGameConfigSignature( g_gameConfig, "ServerFixes::PawnRescueBody" );
-		if ( g_touchVTableOffset < 0 || !g_hostageRescueHandler || !PawnRescueCallMatches() ) {
+		if ( g_touchVTableOffset < 0 || dispatchTargetOffset <= 0 || !g_hostageRescueHandler || !PawnRescueCallMatches() ) {
 			g_initializationError = "current Touch, pawn rescue marker, or native rescue-handler gamedata is unavailable";
 			return false;
 		}
+		g_dispatchTargetOffset = static_cast<std::uintptr_t>( dispatchTargetOffset );
 		const auto offset = []( std::string_view type, std::string_view field ) {
 			return s2sdk::GetSchemaOffset( plg::string( type ), plg::string( field ) );
 		};
@@ -987,7 +1023,7 @@ void ObserveHostageRescueHandler( polyhook::ParametersHandle parameters ) noexce
 		std::int32_t targetHandle{};
 		const auto* const dispatchArgument = static_cast<const std::byte*>(
 			polyhook::GetArgumentPointer( parameters, 4 ) );
-		if ( !ReadHostageDispatchTarget( dispatchArgument, targetHandle ) || !IsValidHandle( targetHandle ) ) {
+		if ( !ReadHostageDispatchTarget( dispatchArgument, g_dispatchTargetOffset, targetHandle ) || !IsValidHandle( targetHandle ) ) {
 			markUncertain();
 			return;
 		}
@@ -1292,7 +1328,6 @@ void OnMapEnd() noexcept {
 	g_attempts.Clear();
 	g_rescueZones.clear();
 	g_lastTouchSync = {};
-	g_tTargetGate.invalidate_module();
 	if ( !DetachTouchCallbacks() ) {
 		g_ctError = "Touch callback removal pending after map end";
 	}

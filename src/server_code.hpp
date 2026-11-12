@@ -9,17 +9,16 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 
 namespace imomoe::server_fixes {
 
-// S2SDK scans a module snapshot. Check live code against its backing image before
-// installing a hook, including when a detour belongs to a different provider.
-inline bool ServerCodeUnmodified( const ServerImage& image, const void* target, std::size_t size ) {
-	std::array<std::byte, 32> original{};
+inline bool ReadServerCode( const ServerImage& image, const void* target, std::span<std::byte> output ) {
 	const auto address = reinterpret_cast<std::uintptr_t>( target );
-	if ( !image.ok || address < image.base || size > original.size() ) {
+	if ( !ContainsReadableRange( image, address, output.size() ) ) {
 		return false;
 	}
+	const auto size = output.size();
 	const auto rva = address - image.base;
 	const auto contains = [&]( std::uintptr_t start, std::size_t length ) {
 		return rva >= start && size <= length && rva - start <= length - size;
@@ -59,8 +58,15 @@ inline bool ServerCodeUnmodified( const ServerImage& image, const void* target, 
 		return false;
 	}
 	std::ifstream file( path, std::ios::binary );
-	return file.seekg( static_cast<std::streamoff>( *fileOffset ) ).read(
-		reinterpret_cast<char*>( original.data() ), static_cast<std::streamsize>( size ) ) &&
+	return static_cast<bool>( file.seekg( static_cast<std::streamoff>( *fileOffset ) ).read(
+		reinterpret_cast<char*>( output.data() ), static_cast<std::streamsize>( size ) ) );
+}
+
+// S2SDK scans a module snapshot. Check live code against its backing image before
+// installing a hook, including when a detour belongs to a different provider.
+inline bool ServerCodeUnmodified( const ServerImage& image, const void* target, std::size_t size ) {
+	std::array<std::byte, 32> original{};
+	return size <= original.size() && ReadServerCode( image, target, std::span( original ).first( size ) ) &&
 		std::memcmp( target, original.data(), size ) == 0;
 }
 

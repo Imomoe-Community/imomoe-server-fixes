@@ -1265,18 +1265,14 @@ bool UpdateCtObservers( bool enabled ) {
 		return false;
 	}
 	const auto now = std::chrono::steady_clock::now();
+	bool touchSyncSucceeded = true;
 	if ( g_lastTouchSync.time_since_epoch().count() == 0 || now - g_lastTouchSync >= std::chrono::seconds( 1 ) ) {
-		if ( !SyncTouchHooks() ) {
-			if ( g_ctError == "no enabled func_hostage_rescue on this map" ) {
-				g_ctObserversActive = true;
-				return true;
-			}
+		touchSyncSucceeded = SyncTouchHooks();
+		if ( !touchSyncSucceeded ) {
 			(void)DetachTouchCallbacks();
-			return false;
 		}
 	}
-	if ( !g_ctError.empty() && g_ctError != "CT fallback is restricted to game_type=3 game_mode=0" &&
-		g_ctError != "m_bMapHasRescueZone is false" ) {
+	if ( !CtObserversReady( touchSyncSucceeded, g_ctError ) ) {
 		return false;
 	}
 	g_ctObserversActive = true;

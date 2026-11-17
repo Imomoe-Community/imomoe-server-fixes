@@ -128,6 +128,14 @@ int main() {
 	Check( !CanObserveRescueTouch( false, true, true ) && !CanObserveRescueTouch( true, false, true ) &&
 		!CanObserveRescueTouch( true, true, false ),
 		"shutdown, disabled configuration, or incomplete observer setup cannot enter CT compensation" );
+	Check( CtObserversReady( true, "" ), "CT observers become ready after rescue-zone synchronization succeeds" );
+	Check( !CtObserversReady( false, "no enabled func_hostage_rescue on this map" ) &&
+		!CtObserversReady( true, "no enabled func_hostage_rescue on this map" ),
+		"a disabled or missing rescue zone stays unavailable both on refresh and during the cached interval" );
+	Check( !CtObserversReady( true, "m_bMapHasRescueZone is false" ) &&
+		!CtObserversReady( true, "CT fallback is restricted to game_type=3 game_mode=0" ) &&
+		!CtObserversReady( false, "" ),
+		"a map or mode without a usable rescue zone and a failed sync cannot report CT ready" );
 
 	std::cout << "hostage compensation and T-gate policy checks passed\n";
 	return 0;

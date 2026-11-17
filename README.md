@@ -110,6 +110,8 @@ exec imomoe_server_fixes.cfg
 | `sf_spawn_remove` | `<id>` | 移除指定 ID 的手动出生点（不影响地图原生出生点）。<br><sub><sup>Removes a specific manual spawn point without touching native spawns.</sup></sub> |
 | `sf_spawn_save` | 无 <br><sub><sup>None</sup></sub> | 将当前地图的手动出生点保存至 `cfg/imomoe_server_fixes/spawn_capacity/<map>.cfg`，下次加载该图时恢复。<br><sub><sup>Saves manual spawn points for the next time the map loads.</sup></sub> |
 
+`hostage_compat` 的 `CT` 显示当前救援区观察器的状态；地图没有可用的救援区或游戏类型不支持时会显示原因。`T` 独立判断，因此 `available=1` 也可能只表示 T 侧可用。`CT=ready` 表示观察器就绪，单次救援结果需查看原生事件。<br><sub><sup>`CT` reports rescue-zone observer readiness and its map or game-mode restriction. `T` is independent, so `available=1` may reflect only T-side availability. `CT=ready` describes the observer; use native events to check an individual rescue.</sup></sub>
+
 ---
 
 ### 配置说明 / Configuration

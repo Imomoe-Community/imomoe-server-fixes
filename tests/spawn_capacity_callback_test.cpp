@@ -18,6 +18,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -313,6 +314,15 @@ bool ForeignRawJoinTeamCommandVeto( CPlayerSlot slot, const CCommand& command ) 
 	return true;
 }
 
+template<typename> struct SecondArgument;
+template<typename R, typename C, typename A, typename B>
+struct SecondArgument<R ( C::* )( A, B )> { using Type = B; };
+template<typename T, typename = void>
+struct ClientUserInfoArgument { using Type = void*; };
+template<typename T>
+struct ClientUserInfoArgument<T, std::void_t<decltype( &T::SetClientUserInfo )>>
+	: SecondArgument<decltype( &T::SetClientUserInfo )> {};
+
 class FakeServerGameClients final : public CBaseAppSystem<IServerGameClients> {
 public:
 	void PreShutdown() override {
@@ -354,7 +364,10 @@ public:
 		}
 		g_playerTeam = static_cast<std::int32_t>( Team::Terrorist );
 	}
-	void ClientStringTableData( CPlayerSlot, void* ) override {
+	// The paired SDK renamed this virtual and changed its argument type.
+	void ClientStringTableData( CPlayerSlot, void* ) {
+	}
+	void SetClientUserInfo( CPlayerSlot, ClientUserInfoArgument<IServerGameClients>::Type ) {
 	}
 	void ClientSettingsChanged( CPlayerSlot ) override {
 	}

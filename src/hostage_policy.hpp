@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <unordered_set>
 
 namespace imomoe::server_fixes::hostage {
@@ -115,6 +116,10 @@ constexpr bool ShouldPatchTTargetGateWhenPolicyUnknown( bool moduleEnabled, bool
 constexpr bool CanObserveRescueTouch( bool lifecycleActive, bool moduleEnabled,
 	bool observersActive ) noexcept {
 	return lifecycleActive && moduleEnabled && observersActive;
+}
+
+constexpr bool CtObserversReady( bool touchSyncSucceeded, std::string_view ctReason ) noexcept {
+	return touchSyncSucceeded && ctReason.empty();
 }
 
 constexpr bool OriginalTTargetGateAllows( std::int32_t team ) noexcept {

@@ -13,6 +13,14 @@
 #include <string_view>
 #include <unordered_map>
 
+#include <plugin_export.h>
+
+// Optional Plugify import. Only this exact current pawn can be exempted
+// from the cheats-off repair; ordinary engine noclip is still cleared.
+extern "C" {
+PLUGIN_API bool (*__imomoe_admin_OwnsClientNoclip)(int, int) = nullptr;
+}
+
 namespace imomoe::server_fixes::compat_guards {
 namespace {
 
@@ -116,7 +124,7 @@ void ResetNoclip() {
 		}
 		const int handle = PlayerPawnHandle( controller );
 		auto* pawn = s2sdk::EntHandleToEntPointer( handle );
-		if ( !pawn ) {
+		if ( !pawn || !CanResetPawnNoclip( __imomoe_admin_OwnsClientNoclip, slot, handle ) ) {
 			continue;
 		}
 		if ( s2sdk::GetEntityMoveType( handle ) != s2sdk::MoveType::Noclip &&

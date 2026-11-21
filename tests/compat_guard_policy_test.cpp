@@ -41,5 +41,17 @@ int main() {
 		VoiceStreamId( 1, 0, 1 ) == VoiceStreamId( 2, 0, 1 ) ) {
 		return EXIT_FAILURE;
 	}
+	constexpr int adminSlot = 3;
+	constexpr int adminPawn = 0x8001;
+	constexpr int newPawn = 0x10001; // Same entity index, different serial.
+	const auto ownsNoclip = []( int clientSlot, int pawnHandle ) {
+		return clientSlot == adminSlot && pawnHandle == adminPawn;
+	};
+	if ( !CanResetPawnNoclip( nullptr, adminSlot, adminPawn ) ||
+		CanResetPawnNoclip( ownsNoclip, adminSlot, adminPawn ) ||
+		!CanResetPawnNoclip( ownsNoclip, adminSlot, newPawn ) ||
+		!CanResetPawnNoclip( ownsNoclip, adminSlot + 1, adminPawn ) ) {
+		return EXIT_FAILURE;
+	}
 	return EXIT_SUCCESS;
 }

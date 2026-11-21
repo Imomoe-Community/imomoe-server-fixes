@@ -82,4 +82,8 @@ constexpr std::uint64_t VoiceStreamId( std::uint32_t mapSeed, std::uint16_t reci
 		( static_cast<std::uint64_t>( recipient ) << 16 ) | speaker;
 }
 
+inline bool CanResetPawnNoclip( bool (*ownsNoclip)(int, int), int slot, int pawnHandle ) {
+	return !ownsNoclip || !ownsNoclip( slot, pawnHandle );
+}
+
 } // namespace imomoe::server_fixes::compat_guards

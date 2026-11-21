@@ -126,6 +126,8 @@ exec imomoe_server_fixes.cfg
 | 关闭 `sv_cheats` 后恢复走路，重生不继承 noclip / <sub><sup>Restore walking when cheats are disabled; clear retained noclip across respawns</sup></sub> | `sf_noclip_reset 1` |
 | 分离 Workshop 地图上的说话者语音流 / <sub><sup>Separate speaker streams on Workshop maps</sup></sub> | `sf_workshop_voice 1` |
 
+`sf_noclip_reset` 仅保留可选的 `imomoe_admin`（≥ 0.1.0）明确认领的当前玩家槽位和 pawn 句柄对应的 noclip。换 pawn 不继承豁免；未安装 Admin 时仍正常清理。<br><sub><sup>`sf_noclip_reset` preserves noclip only for the exact current slot and pawn handle claimed by optional `imomoe_admin` (≥ 0.1.0). The exemption does not carry over to a new pawn; cleanup works without Admin.</sup></sub>
+
 限额为 `0` 时关闭对应限流；超过限额的消息会丢弃，不会踢出客户端。地图维护与移动选项见 [原生修复说明](docs/NATIVE_FAULTS.md)。<br><sub><sup>A limit of `0` disables that rate guard. Excess messages are dropped without disconnecting the client. See [Native Fault Fixes](docs/NATIVE_FAULTS.md) for map maintenance and movement settings.</sup></sub>
 
 <details>

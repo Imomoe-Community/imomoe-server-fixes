@@ -17,6 +17,11 @@
     {
       "name": "polyhook",
       "constraints": ">=2.5.9"
+    },
+    {
+      "name": "imomoe_admin",
+      "constraints": ">=0.1.0",
+      "optional": true
     }
   ],
   "methods": [

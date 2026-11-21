@@ -15,13 +15,13 @@
       },
       "ServerFixes::BeamWriteLocalOrigin": {
         "library": "server",
-        "win64": "40 53 48 83 EC 60 48 8B D9 48 8B 89 70 02 00 00 E8 AB 74 83 00 48 8B 43 10",
-        "linuxsteamrt64": "55 48 89 E5 41 54 53 48 89 FB 48 83 EC 40 48 8B BF 28 05 00 00 E8 16 55 9E 00"
+        "win64": "40 53 48 83 EC 60 48 8B D9 48 8B 89 70 02 00 00 E8 0B 87 83 00 48 8B 43 10",
+        "linuxsteamrt64": "55 48 89 E5 41 54 53 48 89 FB 48 83 EC 40 48 8B BF 28 05 00 00 E8 96 6B 9E 00"
       },
       "ServerFixes::BeamGetParent": {
         "library": "server",
-        "win64": "48 8B 81 70 02 00 00 48 8B 48 38 48 85 C9 0F 85 AC 42 82 00",
-        "linuxsteamrt64": "48 8B 87 28 05 00 00 48 8B 78 38 48 85 FF 74 08 E9 AB E7 9D 00"
+        "win64": "48 8B 81 70 02 00 00 48 8B 48 38 48 85 C9 0F 85 FC 54 82 00",
+        "linuxsteamrt64": "48 8B 87 28 05 00 00 48 8B 78 38 48 85 FF 74 08 E9 2B FE 9D 00"
       },
       "ServerFixes::FilterAcceptInput": {
         "library": "server",
@@ -30,20 +30,20 @@
       },
       "ServerFixes::PlayerEquipPrecacheLookup": {
         "library": "server",
-        "win64": "48 8D 4C 24 30 48 8B D8 FF 15 E4 F3 92 00 48 85 DB 74 5F 80 3B 00 74 5A 4D 8B C6 48 8B D3 B9 01 00 00 00 E8 2A F9 71 FF",
-        "linuxsteamrt64": "4C 89 E7 49 89 C5 E8 A7 49 00 FF 4D 85 ED 74 AA 41 80 7D 00 00 74 A3 4C 89 F2 4C 89 EE BF 01 00 00 00 E8 4B 5E 4F FF"
+        "win64": "48 8D 4C 24 30 48 8B D8 FF 15 04 F1 92 00 48 85 DB 74 5F 80 3B 00 74 5A 4D 8B C6 48 8B D3 B9 01 00 00 00 E8 CA E6 71 FF",
+        "linuxsteamrt64": "4C 89 E7 49 89 C5 E8 A7 32 00 FF 4D 85 ED 74 AA 41 80 7D 00 00 74 A3 4C 89 F2 4C 89 EE BF 01 00 00 00 E8 CB 47 4F FF"
       },
       // no-argument GC enforcement pass and a separate
       // reference to its static account map (RIP-relative LEA at +3).
       "ServerFixes::CheckSteamBan": {
         "library": "server",
-        "win64": "41 54 48 81 EC 90 00 00 00 48 8B 05 30 3F 7C 01 44 8B 60 58 45 85 E4",
-        "linuxsteamrt64": "55 48 89 E5 41 57 41 56 41 55 41 54 53 48 83 EC 68 48 8B 05 60 9A 55 01 44 8B 68 58 45 85 ED"
+        "win64": "41 54 48 81 EC 90 00 00 00 48 8B 05 00 4E 7C 01 44 8B 60 58 45 85 E4",
+        "linuxsteamrt64": "55 48 89 E5 41 57 41 56 41 55 41 54 53 48 83 EC 68 48 8B 05 40 A2 55 01 44 8B 68 58 45 85 ED"
       },
       "ServerFixes::GcBanMapReference": {
         "library": "server",
-        "win64": "48 8D 0D CF 29 7F 01 45 33 C0 4C 89 74 24 78 0F 11 44 24 28",
-        "linuxsteamrt64": "48 8D 35 39 68 3E 01 89 C2 48 63 46 18 83 F8 FF 0F 84"
+        "win64": "48 8D 0D 4F 38 7F 01 45 33 C0 4C 89 74 24 78 0F 11 44 24 28",
+        "linuxsteamrt64": "48 8D 35 D9 6F 3E 01 89 C2 48 63 46 18 83 F8 FF 0F 84"
       },
       "ServerFixes::GcBanIdentity": {
         "library": "server",
@@ -70,19 +70,19 @@
       // hostage processing was actually dispatched for the carried handle.
       "ServerFixes::HostageOnRescueZoneTouch": {
         "library": "server",
-        "win64": "48 89 5C 24 08 57 48 83 EC 40 48 8B 44 24 70 49 8B D9 48 8B 40 08 8B 00 83 F8 FF 0F 84 B5 00 00 00 4C 8B 15 F0 64 BD 01 33",
-        "linuxsteamrt64": "49 8B 40 08 49 89 C9 8B 08 83 F9 FF 0F 84 80 00 00 00 48 8B 15 AF 5C AE 01 48 85 D2 74 74 83 F9 FE 74 6F 48 89 C8 89 CF 48"
+        "win64": "48 89 5C 24 08 57 48 83 EC 40 48 8B 44 24 70 49 8B D9 48 8B 40 08 8B 00 83 F8 FF 0F 84 B5 00 00 00 4C 8B 15 40 84 BD 01 33",
+        "linuxsteamrt64": "49 8B 40 08 49 89 C9 8B 08 83 F9 FF 0F 84 80 00 00 00 48 8B 15 2F 78 AE 01 48 85 D2 74 74 83 F9 FE 74 6F 48 89 C8 89 CF 48"
       },
       // Start at the MOV before CALL: PolyHook would follow the CALL itself.
       "ServerFixes::PawnRescueBeforeBodyCall": {
         "library": "server",
-        "win64": "48 8B CF E8 A6 F1 05 00 48 8B 5C 24 50 33 C0 48 83 C4 40 5F C3",
+        "win64": "48 8B CF E8 B6 EF 05 00 48 8B 5C 24 50 33 C0 48 83 C4 40 5F C3",
         "linuxsteamrt64": "48 89 DF E8 1C FB FF FF 48 83 C4 20 31 C0 5B 41 5C 5D C3"
       },
       "ServerFixes::PawnRescueBody": {
         "library": "server",
-        "win64": "40 53 48 83 EC 40 48 8B D9 48 8B 0D E0 30 F6 01 E8 2B D5 6F 00 84 C0 0F 84 7F 01 00 00",
-        "linuxsteamrt64": "55 48 89 E5 41 57 41 56 41 55 41 54 53 48 89 FB 48 81 EC 58 01 00 00 48 8D 05 8A F9 EA 01"
+        "win64": "40 53 48 83 EC 40 48 8B D9 48 8B 0D 80 54 F6 01 E8 0B E7 6F 00 84 C0 0F 84 7F 01 00 00",
+        "linuxsteamrt64": "55 48 89 E5 41 57 41 56 41 55 41 54 53 48 89 FB 48 81 EC 58 01 00 00 48 8D 05 0A 16 EB 01"
       },
       // both jump attempt routines call CompleteJump after
       // applying the movement impulse. Their wrappers do not consume a return.
@@ -99,7 +99,7 @@
       "ServerFixes::CompleteJump": {
         "library": "server",
         "win64": "48 89 5C 24 18 55 56 57 48 83 EC 30 8B 9A D4 00 00 00 48 8B EA 0F 29 74 24 20 48 8B F9 F3 0F 10 B2 DC 00 00 00",
-        "linuxsteamrt64": "55 48 89 E5 41 57 41 56 41 55 41 54 49 89 F4 53 48 89 FB 48 83 EC 58 F3 0F 10 0D C9 E4 31 FF F3 0F 10 86 DC 00 00 00 44 8B AE D4 00"
+        "linuxsteamrt64": "55 48 89 E5 41 57 41 56 41 55 41 54 49 89 F4 53 48 89 FB 48 83 EC 58 F3 0F 10 0D 69 CD 31 FF F3 0F 10 86 DC 00 00 00 44 8B AE D4 00"
       },
       // the water walk calls WaterMove and then immediately
       // CategorizePosition with the same service, move data and false.
@@ -127,7 +127,7 @@
       "ServerFixes::RampUncachedHullTrace": {
         "library": "server",
         "win64": "48 8B C4 4C 89 40 18 55 53 57 41 55 41 56 48 8D A8 68 FE FF FF 48 81 EC 70 02 00 00 49 8B 79 10 48 8B DA",
-        "linuxsteamrt64": "55 48 89 E5 41 57 49 89 FF 41 56 49 89 D6 41 55 41 54 49 89 F4 53 48 89 CB 48 81 EC 18 02 00 00 48 8D 05 09 86 1E 01"
+        "linuxsteamrt64": "55 48 89 E5 41 57 49 89 FF 41 56 49 89 D6 41 55 41 54 49 89 F4 53 48 89 CB 48 81 EC 18 02 00 00 48 8D 05 29 8D 1E 01"
       },
       // CServerSideClient::ProcessCmdKeyValues, bool (this, const message&).
       // Native pending-request check/initialization and queue-count access.
@@ -158,7 +158,7 @@
       "ServerFixes::SelectAndKickBot": {
         "library": "server",
         "win64": "48 89 5C 24 18 55 56 57 41 56 41 57 48 8B EC 48 83 EC 50 8B F9 89 4D 38 48 8D 4D 38 C7 45 3C 01 00 00 00 48 8D 55 E8 E8 A4 71 00 00",
-        "linuxsteamrt64": "55 48 89 E5 41 57 41 56 41 55 41 89 FD 41 54 53 48 83 EC 58 4C 8D 25 2D 2C B9 01 89 7D A0 C7 45 90 00 00 00 00 C7 45 A4 01 00 00 00"
+        "linuxsteamrt64": "55 48 89 E5 41 57 41 56 41 55 41 89 FD 41 54 53 48 83 EC 58 4C 8D 25 4D 47 B9 01 89 7D A0 C7 45 90 00 00 00 00 C7 45 A4 01 00 00 00"
       },
       "ServerFixes::BotTeamCandidate": {
         "library": "server",
@@ -169,12 +169,12 @@
       // reads the typed "hammerUniqueId" key and writes the entity's Hammer ID.
       "ServerFixes::HammerIdSkip": {
         "library": "server",
-        "win64": "74 5E 48 8D 05 11 73 AB 00 48 C7 44 24 20 38 A0 63 A9 45 33 C0 48 89 44",
-        "linuxsteamrt64": "74 5A 48 8D 05 1D F4 07 FF 31 D2 4C 89 E7 48 C7 45 A0 38 A0 63 A9 48 8D"
+        "win64": "74 5E 48 8D 05 51 70 AB 00 48 C7 44 24 20 38 A0 63 A9 45 33 C0 48 89 44",
+        "linuxsteamrt64": "74 5A 48 8D 05 FD DA 07 FF 31 D2 4C 89 E7 48 C7 45 A0 38 A0 63 A9 48 8D"
       },
       "ServerFixes::HostageTeamGate": {
         "library": "server",
-        "win64": "80 BD 44 03 00 00 03 75 30 48 8B CB E8 8A 6E E7 FF 84 C0 74 24 48 8B CB",
+        "win64": "80 BD 44 03 00 00 03 75 30 48 8B CB E8 1A 6E E7 FF 84 C0 74 24 48 8B CB",
         "linuxsteamrt64": "41 80 BD 24 06 00 00 03 0F 84 07 01 00 00 4D 89 26 48 89 DF 49 C7 46 08 01 00 00 00"
       }
     },

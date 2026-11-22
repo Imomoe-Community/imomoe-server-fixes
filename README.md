@@ -2,12 +2,16 @@
 
 # Imomoe Server Fixes (`imomoe_server_fixes`)
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20x64-lightgrey.svg)]()
-[![Framework](https://img.shields.io/badge/Framework-Plugify%203.1.0%20%2B%20S2SDK%203.4.2-success.svg)](https://github.com/untrustedmodders/plugify)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![C++: C++23](https://img.shields.io/badge/C%2B%2B-C%2B%2B23-orange.svg)](CMakeLists.txt)
+[![CS2: Compatible](https://img.shields.io/badge/CS2-Dedicated%20Server-black.svg)](https://www.counter-strike.net/)
+[![Platform: Plugify](https://img.shields.io/badge/Plugify-v3.1.0%2B-purple.svg)](https://github.com/untrustedmodders/plugify)
+[![CI](https://github.com/Imomoe-Community/imomoe-server-fixes/actions/workflows/ci.yml/badge.svg)](https://github.com/Imomoe-Community/imomoe-server-fixes/actions/workflows/ci.yml)
 
 **高性能、轻量级的 Counter-Strike 2 服务端底层缺陷修复与容量兼容扩展**<br>
 <sub><sup>A high-performance, lightweight Counter-Strike 2 dedicated server fixes and capacity compatibility extension.</sup></sub>
+
+**双语 / Bilingual** · [English](README.en.md)
 
 </div>
 
@@ -194,6 +198,8 @@ python3 tools/build_paired.py --funrounds-source <path-to-funrounds> --cs2-bin <
 
 产物将输出至 `dist/imomoe-server-fixes-<platform>-<name>.zip`。
 <sub><sup>Artifacts generated into `dist/imomoe-server-fixes-<platform>-<name>.zip`.</sup></sub>
+
+- [依赖与构建输入 / Dependencies](docs/DEPENDENCIES.md) · [原生修复说明 / Native Faults](docs/NATIVE_FAULTS.md) · [贡献指南 / Contributing](CONTRIBUTING.md) · [安全通告 / Security](SECURITY.md) · [版本记录 / Changelog](CHANGELOG.md)
 
 ---
 

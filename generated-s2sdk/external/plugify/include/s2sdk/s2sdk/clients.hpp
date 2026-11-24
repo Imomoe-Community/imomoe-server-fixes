@@ -256,18 +256,6 @@ namespace s2sdk {
     return __s2sdk_RespawnClient(playerSlot);
   }
 
-  using _ForceRespawnClient = void (*)(int32_t);
-}
-extern "C" PLUGIN_API s2sdk::_ForceRespawnClient __s2sdk_ForceRespawnClient;
-namespace s2sdk {
-  /**
-   * @brief Forces a full engine respawn for a player, including when the current pawn is alive. Supported in CS2.
-   * @param playerSlot (int32): The index of the player's slot to respawn.
-   */
-  inline void ForceRespawnClient(int32_t playerSlot) {
-    return __s2sdk_ForceRespawnClient(playerSlot);
-  }
-
   using _GetClientSpeed = float (*)(int32_t);
 }
 extern "C" PLUGIN_API s2sdk::_GetClientSpeed __s2sdk_GetClientSpeed;

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Build the pinned paired S2SDK, test ServerFixes, and produce one platform ZIP."""
+"""Build and test ServerFixes against a paired SDK and produce one platform ZIP."""
 from __future__ import annotations
 import argparse
 import importlib.util
@@ -50,36 +50,69 @@ def load_sdk(main_source: Path):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--funrounds-source", type=Path, required=True,
-                        help="FunRounds checkout containing the pinned scripts/build-sdk.py and runtime/s2sdk.json")
-    parser.add_argument("--generator", type=Path, help="plugify-gen v1.2.15 executable; defaults to .work/tools")
+    provider = parser.add_mutually_exclusive_group(required=True)
+    provider.add_argument("--sdk-source", type=Path, help="official S2SDK source checkout")
+    provider.add_argument("--funrounds-source", type=Path,
+                          help="use a FunRounds checkout to build its pinned paired SDK")
+    parser.add_argument("--sdk-build", type=Path, help="configured build of --sdk-source")
+    parser.add_argument("--steamrt-image", help="Steam Runtime GCC 14 image used for --sdk-build on Linux")
+    parser.add_argument("--generator", type=Path, help="plugify-gen v1.2.15 executable for --funrounds-source")
     parser.add_argument("--work-name", help="new unique name under this repo's .work/; defaults to the current timestamp")
     parser.add_argument("--resume-source", type=Path, help="reuse a clean pinned SDK source checkout for the selected host")
     parser.add_argument("--cs2-bin", type=Path, help="CS2 game/bin/win64 or game/bin/linuxsteamrt64 for callback tests; defaults to CS2_GAME_BIN")
     args = parser.parse_args()
-    main_source = args.funrounds_source.resolve()
-    if not (main_source / "runtime/s2sdk.json").is_file():
-        parser.error(f"Not a FunRounds checkout: {main_source}")
-    generator = args.generator.resolve() if args.generator else None
-    if generator is None:
-        candidates = [ROOT / ".work/tools/plugify-gen-v1.2.15" / ("plugify-gen.exe" if sys.platform == "win32" else "plugify-gen"),
-                      main_source / ".work/tools/plugify-gen-v1.2.15" / ("plugify-gen.exe" if sys.platform == "win32" else "plugify-gen")]
-        generator = next((path for path in candidates if path.is_file()), None)
-        if generator is None:
-            parser.error("plugify-gen 1.2.15 is not installed in .work/tools; download it from the project build setup or pass --generator PATH")
-    if not generator.is_file():
-        parser.error(f"Missing plugify-gen: {generator}")
+    main_source = args.funrounds_source.resolve() if args.funrounds_source else None
     work_name = args.work_name or datetime.now().strftime("%Y%m%d-%H%M%S")
     if not work_name or Path(work_name).name != work_name or work_name in {".", ".."}:
         parser.error("--work-name must be one directory name, not a path")
     work = ROOT / ".work" / f"serverfixes-{work_name}"
     if work.exists():
         parser.error(f"Work directory already exists; choose another --work-name: {work}")
-    sdk_work = main_source / ".work" / f"serverfixes-sdk-{work_name}"
-    if sdk_work.exists():
-        parser.error(f"SDK work directory already exists; choose another --work-name: {sdk_work}")
-    sdk = load_sdk(main_source)
-    target = sdk.host_name()
+    sdk_args = None
+    sdk = None
+    if main_source:
+        if args.sdk_build or args.steamrt_image:
+            parser.error("--sdk-build and --steamrt-image are for --sdk-source")
+        if not (main_source / "runtime/s2sdk.json").is_file():
+            parser.error(f"Not a FunRounds checkout: {main_source}")
+        executable = "plugify-gen.exe" if sys.platform == "win32" else "plugify-gen"
+        generator = args.generator.resolve() if args.generator else next(
+            (path for checkout in (ROOT, main_source)
+             if (path := checkout / ".work/tools/plugify-gen-v1.2.15" / executable).is_file()), None)
+        if generator is None or not generator.is_file():
+            parser.error("Install plugify-gen 1.2.15 in .work/tools or pass --generator PATH")
+        sdk_work = main_source / ".work" / f"serverfixes-sdk-{work_name}"
+        if sdk_work.exists():
+            parser.error(f"SDK work directory already exists; choose another --work-name: {sdk_work}")
+        sdk = load_sdk(main_source)
+        target = sdk.host_name()
+        sdk_args = [sys.executable, main_source / "scripts/build-sdk.py", "--generator", generator,
+                    "--work-dir", sdk_work]
+        if target == "linux-x64":
+            sdk_args += ["--container-image", sdk.STEAMRT_BASE_IMAGE]
+        if args.resume_source:
+            sdk_args += ["--resume-source", args.resume_source.resolve()]
+        source = choose_sdk_source(sdk_work, args.resume_source)
+        build = sdk_work / "build"
+    else:
+        if args.generator or args.resume_source:
+            parser.error("--generator and --resume-source are for --funrounds-source")
+        if not args.sdk_build:
+            parser.error("--sdk-source requires --sdk-build")
+        source, build = args.sdk_source.resolve(), args.sdk_build.resolve()
+        if not (source / "plugify-plugin-s2sdk.pplugin.in").is_file() or not (build / "CMakeCache.txt").is_file():
+            parser.error("Pass the S2SDK checkout and its configured build directory")
+        if sys.platform not in ("win32", "linux"):
+            parser.error("Only Windows and Linux builds are supported")
+        target = "windows-x64" if sys.platform == "win32" else "linux-x64"
+        if target == "windows-x64":
+            cache = (build / "CMakeCache.txt").read_text(encoding="utf-8")
+            generator = next((line.split("=", 1)[1] for line in cache.splitlines()
+                              if line.startswith("CMAKE_GENERATOR:INTERNAL=")), "")
+            if not generator.startswith("Visual Studio "):
+                parser.error("Configure the Windows S2SDK build with a Visual Studio generator and -A x64")
+        elif not args.steamrt_image:
+            parser.error("Linux builds with --sdk-source require --steamrt-image")
     cs2_bin = args.cs2_bin or (Path(os.environ["CS2_GAME_BIN"]) if os.environ.get("CS2_GAME_BIN") else None)
     if cs2_bin is None or not cs2_bin.is_dir():
         parser.error("Callback tests need the CS2 runtime library directory; pass --cs2-bin or set CS2_GAME_BIN")
@@ -91,18 +124,10 @@ def main() -> None:
     global LOG_DIR
     LOG_DIR = work / "logs"
     LOG_DIR.mkdir()
-    sdk_args = [sys.executable, main_source / "scripts/build-sdk.py", "--generator", generator,
-                "--work-dir", sdk_work]
-    if target == "linux-x64":
-        sdk_args += ["--container-image", sdk.STEAMRT_BASE_IMAGE]
-    if args.resume_source:
-        sdk_args += ["--resume-source", args.resume_source.resolve()]
     run([sys.executable, "-m", "unittest", "discover", "-s", ROOT / "tests", "-p", "test_*.py"])
     run([sys.executable, "-m", "unittest", "discover", "-s", ROOT / "tools/tests", "-p", "test_*.py"])
-    run(sdk_args)
-    source = choose_sdk_source(sdk_work, args.resume_source)
-    build = sdk_work / "build"
-    output = sdk_work / "output"
+    if sdk_args:
+        run(sdk_args)
     plugify = source / "external/plugify/include"
     source_sdk = source / "external/sourcesdk"
     config = [
@@ -114,66 +139,54 @@ def main() -> None:
         f"-DSERVER_FIXES_SOURCE_SDK_PROTO_INCLUDE_DIR={build / 'external/sourcesdk/protos'}",
     ]
     policy = work / "policy"
-    sdk_runtime_container = str(source_sdk / "lib/linuxsteamrt64").replace(str(main_source), "/workspace")
     production = work / "production"
     if target == "windows-x64":
-        gen = sdk.windows_cmake_generator()
-        cmake_gen = ["-G", gen, "-A", "x64"]
+        cmake_gen = ["-G", sdk.windows_cmake_generator() if sdk else generator, "-A", "x64"]
         build_args = ["--config", "Release", "--parallel", "1", "--", "/nr:false"]
         container = None
     else:
         cmake_gen = ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=/usr/bin/gcc-14",
                      "-DCMAKE_CXX_COMPILER=/usr/bin/g++-14"]
         build_args = ["--config", "Release", "--parallel", str(min(4, os.cpu_count() or 1))]
-        sdk.prepare_steamrt_build_image(sdk.STEAMRT_BASE_IMAGE)
-        container = sdk.STEAMRT_BUILD_IMAGE
+        if sdk:
+            sdk.prepare_steamrt_build_image(sdk.STEAMRT_BASE_IMAGE)
+            container = sdk.STEAMRT_BUILD_IMAGE
+        else:
+            container = args.steamrt_image
 
-    def cmake(command: list[str | Path]) -> None:
-        if container is None:
-            run(command)
-        else:
-            run(["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
-                 "--env", "HOME=/tmp", "--volume", f"{ROOT}:/serverfixes",
-                 "--volume", f"{main_source}:/workspace", "--volume", f"{cs2_bin}:/cs2-bin:ro",
-                 "--workdir", "/serverfixes", container, *[str(x) for x in command]])
+    def in_container(path: str | Path) -> str:
+        if main_source:
+            return str(path).replace(str(ROOT), "/serverfixes").replace(str(main_source), "/workspace")
+        return str(path)
 
-    # Container paths are remapped explicitly after composing host paths.
-    def cmake_args(root: Path, binary: Path, extra: list[str]) -> list[str | Path]:
-        values: list[str | Path] = ["cmake", "-S", root, "-B", binary, *cmake_gen, *extra]
+    def cmake(command: list[str | Path], *, test_runtime: bool = False) -> None:
         if container:
-            values = [str(x).replace(str(ROOT), "/serverfixes").replace(str(main_source), "/workspace") for x in values]
-        return values
-    def build_target(binary: Path, targets: list[str]) -> None:
-        values: list[str | Path] = ["cmake", "--build", binary, *(["--target", *targets] if targets else []), *build_args]
-        if container:
-            values = [str(x).replace(str(ROOT), "/serverfixes").replace(str(main_source), "/workspace") for x in values]
-        if container:
+            mounts = ["--volume", f"{ROOT}:{in_container(ROOT)}", "--volume", f"{cs2_bin}:/cs2-bin:ro"]
+            if main_source:
+                mounts += ["--volume", f"{main_source}:/workspace"]
+            else:
+                for path in (source, build):
+                    mounts += ["--volume", f"{path}:{path}:ro"]
+            runtime = in_container(source_sdk / "lib/linuxsteamrt64")
             run(["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
-                 "--env", "HOME=/tmp", "--env", f"LD_LIBRARY_PATH=/cs2-bin:{sdk_runtime_container}",
-                 "--volume", f"{ROOT}:/serverfixes", "--volume", f"{main_source}:/workspace",
-                 "--volume", f"{cs2_bin}:/cs2-bin:ro", "--workdir", "/serverfixes", container, *values])
-        else:
-            run(values)
-    def test(binary: Path) -> None:
-        values = ["ctest", "--test-dir", binary, "--build-config", "Release", "--output-on-failure"]
-        if container:
-            values = [str(x).replace(str(ROOT), "/serverfixes").replace(str(main_source), "/workspace") for x in values]
-            run(["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
-                 "--env", "HOME=/tmp", "--env", f"LD_LIBRARY_PATH=/cs2-bin:{sdk_runtime_container}",
-                 "--volume", f"{ROOT}:/serverfixes", "--volume", f"{main_source}:/workspace",
-                 "--volume", f"{cs2_bin}:/cs2-bin:ro", "--workdir", "/serverfixes", container, *values])
-        else:
+                 "--env", "HOME=/tmp", "--env", f"LD_LIBRARY_PATH=/cs2-bin:{runtime}",
+                 *mounts, "--workdir", in_container(ROOT), container, *map(in_container, command)])
+        elif test_runtime:
             old_path = os.environ.get("PATH", "")
             os.environ["PATH"] = str(cs2_bin) + os.pathsep + old_path
             try:
-                run(values)
+                run(command)
             finally:
                 os.environ["PATH"] = old_path
-    cmake(cmake_args(ROOT, policy, [*config, "-DSERVER_FIXES_POLICY_TESTS_ONLY=ON", "-DSERVER_FIXES_CALLBACK_TESTS=ON"]))
-    build_target(policy, [])
-    test(policy)
-    cmake(cmake_args(ROOT, production, [*config]))
-    build_target(production, ["imomoe-server-fixes"])
+        else:
+            run(command)
+
+    cmake(["cmake", "-S", ROOT, "-B", policy, *cmake_gen, *config,
+           "-DSERVER_FIXES_POLICY_TESTS_ONLY=ON", "-DSERVER_FIXES_CALLBACK_TESTS=ON"])
+    cmake(["cmake", "--build", policy, *build_args])
+    cmake(["ctest", "--test-dir", policy, "--build-config", "Release", "--output-on-failure"], test_runtime=True)
+    cmake(["cmake", "-S", ROOT, "-B", production, *cmake_gen, *config])
+    cmake(["cmake", "--build", production, "--target", "imomoe-server-fixes", *build_args])
     binary = production / "bin" / ("imomoe-server-fixes.dll" if target == "windows-x64" else "libimomoe-server-fixes.so")
     if not binary.is_file():
         raise FileNotFoundError(f"Expected production plugin missing: {binary}")

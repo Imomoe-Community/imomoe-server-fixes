@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/Mai-Ooizumi/plugify-plugin-s2sdk/e358fcba28f05956f6276278b4bba7c575805c86/schemas/gamedata.schema.json",
+  "$schema": "https://raw.githubusercontent.com/untrustedmodders/plugify-plugin-s2sdk/v3.5.1/schemas/gamedata.schema.json",
   "csgo": {
     "Signatures": {
       // Equip lookup anchors the transient GetString result before it is saved.

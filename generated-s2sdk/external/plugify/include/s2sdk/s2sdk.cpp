@@ -88,8 +88,6 @@ s2sdk::_GetAllConCommands __s2sdk_GetAllConCommands = nullptr;
 
 s2sdk::_RemoveCommandListener __s2sdk_RemoveCommandListener = nullptr;
 
-s2sdk::_HasConsoleCommandCallbacks __s2sdk_HasConsoleCommandCallbacks = nullptr;
-
 s2sdk::_FindConVar __s2sdk_FindConVar = nullptr;
 
 s2sdk::_GetConVarValue __s2sdk_GetConVarValue = nullptr;
@@ -151,8 +149,6 @@ s2sdk::_PbGetRepeatedString __s2sdk_PbGetRepeatedString = nullptr;
 s2sdk::_PbAddString __s2sdk_PbAddString = nullptr;
 
 s2sdk::_RespawnClient __s2sdk_RespawnClient = nullptr;
-
-s2sdk::_ForceRespawnClient __s2sdk_ForceRespawnClient = nullptr;
 
 s2sdk::_GetGameTime __s2sdk_GetGameTime = nullptr;
 

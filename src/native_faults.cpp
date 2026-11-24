@@ -16,6 +16,7 @@
 #include <entity2/entitynetwork.h>
 #include <netmessages.h>
 #include <serversideclient.h>
+#include <bspflags.h>
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,7 @@
 #include <mutex>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 namespace imomoe::server_fixes::native_faults {
@@ -164,10 +166,24 @@ struct JumpStamp {
 	CEntityHandle pawn;
 	std::int32_t tick{};
 };
+struct OwnedMovementMask {
+	std::uint64_t nativeBits{};
+	std::uint64_t writtenBits{};
+};
 std::vector<JumpStamp> g_lastJumps;
 std::int32_t g_jumpOwnerOffset{}, g_jumpPawnOffset{}, g_moveTickOffset{};
 thread_local bool g_jumpMapReady{};
 std::uint64_t g_rampStandable{};
+std::int32_t g_playerPawnChainOffset{}, g_pawnCollisionOffset{};
+std::int32_t g_collisionAttributeOffset{}, g_interactsWithOffset{};
+std::uint64_t g_solidTeammates{};
+using SetCollisionInteractsWith = void ( * )( void*, std::int64_t );
+SetCollisionInteractsWith g_setCollisionInteractsWith{};
+std::unordered_map<std::int32_t, OwnedMovementMask> g_ownedMovementBits;
+bool g_enemyCollisionEnabled{};
+thread_local void* g_enemyCollisionMovePawn{};
+thread_local void* g_enemyCollisionMoveSetterObject{};
+thread_local std::int32_t g_enemyCollisionMoveHandle{ -1 };
 
 struct KeyValuesLimits {
 	int rate{};
@@ -376,6 +392,125 @@ T ReadMoveField( const void* object, std::int32_t offset ) noexcept {
 	T value;
 	std::memcpy( &value, static_cast<const std::byte*>( object ) + offset, sizeof( value ) );
 	return value;
+}
+
+ResultType OnPlayerSetupMove( polyhook::HookHandle, polyhook::ParametersHandle parameters, std::int32_t,
+	polyhook::ReturnHandle, CallbackType phase ) noexcept {
+	if ( phase == CallbackType::Post ) {
+		g_enemyCollisionMovePawn = nullptr;
+		g_enemyCollisionMoveSetterObject = nullptr;
+		g_enemyCollisionMoveHandle = -1;
+		return ResultType::Ignored;
+	}
+	g_enemyCollisionMovePawn = nullptr;
+	g_enemyCollisionMoveSetterObject = nullptr;
+	g_enemyCollisionMoveHandle = -1;
+	if ( !g_enemyCollisionEnabled || !State( Fix::EnemyCollisionFollowsTeammates ).armed || !parameters ) {
+		return ResultType::Ignored;
+	}
+	auto* services = static_cast<std::byte*>( polyhook::GetArgumentPointer( parameters, 0 ) );
+	if ( !services || g_playerPawnChainOffset <= 0 || g_pawnCollisionOffset <= 0 ||
+		g_collisionAttributeOffset < 0 || !g_solidTeammates ) {
+		return ResultType::Ignored;
+	}
+	auto* pawn = reinterpret_cast<CNetworkVarChainer*>( services + g_playerPawnChainOffset )->GetObject();
+	if ( !pawn ) {
+		return ResultType::Ignored;
+	}
+	const auto handle = s2sdk::EntPointerToEntHandle( pawn );
+	if ( handle == -1 || !s2sdk::IsValidEntHandle( handle ) ) {
+		return ResultType::Ignored;
+	}
+	const auto team = s2sdk::GetEntSchema2( pawn, "CBaseEntity", "m_iTeamNum", 0 );
+	if ( team != 2 && team != 3 ) {
+		return ResultType::Ignored;
+	}
+	auto* collision = ReadMoveField<void*>( pawn, g_pawnCollisionOffset );
+	if ( !collision ) {
+		return ResultType::Ignored;
+	}
+	g_enemyCollisionMovePawn = pawn;
+	// The native movement path passes the Pawn's CCollisionProperty to the setter on both platforms.
+	g_enemyCollisionMoveSetterObject = collision;
+	g_enemyCollisionMoveHandle = handle;
+	return ResultType::Ignored;
+}
+
+ResultType OnSetCollisionInteractsWith( polyhook::HookHandle, polyhook::ParametersHandle parameters, std::int32_t,
+	polyhook::ReturnHandle, CallbackType phase ) noexcept {
+	if ( phase != CallbackType::Pre || !g_enemyCollisionEnabled || !State( Fix::EnemyCollisionFollowsTeammates ).armed ||
+		!g_enemyCollisionMovePawn || !g_enemyCollisionMoveSetterObject || g_enemyCollisionMoveHandle == -1 || !parameters ) {
+		return ResultType::Ignored;
+	}
+	auto* setterObject = polyhook::GetArgumentPointer( parameters, 0 );
+	if ( !setterObject || setterObject != g_enemyCollisionMoveSetterObject ) {
+		return ResultType::Ignored;
+	}
+	constexpr std::uint64_t kMovementTeamBits = CONTENTS_CSGO_TEAM1 | CONTENTS_CSGO_TEAM2;
+	constexpr std::uint64_t kOwnedBits = CONTENTS_PLAYER | kMovementTeamBits;
+	const auto mask = static_cast<std::uint64_t>( polyhook::GetArgumentInt64( parameters, 1 ) );
+	const auto nativeBits = mask & kOwnedBits;
+	const auto teammateRule = s2sdk::GetConVarInt32( g_solidTeammates );
+	auto sharedMask = ( mask | CONTENTS_PLAYER ) & ~kMovementTeamBits;
+	if ( teammateRule == 0 || teammateRule == 2 ) {
+		sharedMask |= CONTENTS_CSGO_TEAM1;
+	}
+	if ( ( sharedMask & kOwnedBits ) != nativeBits ) {
+		try {
+			g_ownedMovementBits.insert_or_assign( g_enemyCollisionMoveHandle,
+				OwnedMovementMask{ nativeBits, sharedMask & kOwnedBits } );
+		} catch ( ... ) {
+			return ResultType::Ignored;
+		}
+	} else {
+		g_ownedMovementBits.erase( g_enemyCollisionMoveHandle );
+	}
+	if ( sharedMask != mask ) {
+		polyhook::SetArgumentInt64( parameters, 1, static_cast<std::int64_t>( sharedMask ) );
+	}
+	return ResultType::Ignored;
+}
+
+bool RestoreEnemyCollisionMasks() noexcept {
+	constexpr std::uint64_t kOwnedBits = CONTENTS_PLAYER | CONTENTS_CSGO_TEAM1 | CONTENTS_CSGO_TEAM2;
+	if ( g_ownedMovementBits.empty() ) {
+		return true;
+	}
+	if ( !g_setCollisionInteractsWith || g_pawnCollisionOffset <= 0 || g_collisionAttributeOffset < 0 ||
+		g_interactsWithOffset < 0 || !__s2sdk_IsValidEntHandle || !__s2sdk_EntHandleToEntPointer ) {
+		return false;
+	}
+	for ( auto current = g_ownedMovementBits.begin(); current != g_ownedMovementBits.end(); ) {
+		const auto handle = current->first;
+		if ( handle == -1 || !s2sdk::IsValidEntHandle( handle ) ) {
+			current = g_ownedMovementBits.erase( current );
+			continue;
+		}
+		auto* pawn = s2sdk::EntHandleToEntPointer( handle );
+		if ( !pawn || s2sdk::EntPointerToEntHandle( pawn ) != handle ) {
+			current = g_ownedMovementBits.erase( current );
+			continue;
+		}
+		auto* collision = ReadMoveField<void*>( pawn, g_pawnCollisionOffset );
+		if ( !collision ) {
+			current = g_ownedMovementBits.erase( current );
+			continue;
+		}
+		auto* attributes = static_cast<std::byte*>( collision ) + g_collisionAttributeOffset;
+		const auto currentMask = ReadMoveField<std::uint64_t>( attributes, g_interactsWithOffset );
+		if ( ( currentMask & kOwnedBits ) == current->second.writtenBits ) {
+			const auto restoredMask = ( currentMask & ~kOwnedBits ) | current->second.nativeBits;
+			if ( restoredMask != currentMask ) {
+				try {
+					g_setCollisionInteractsWith( collision, static_cast<std::int64_t>( restoredMask ) );
+				} catch ( ... ) {
+					return false;
+				}
+			}
+		}
+		current = g_ownedMovementBits.erase( current );
+	}
+	return true;
 }
 
 std::optional<JumpStamp> JumpArguments( polyhook::ParametersHandle parameters, bool fromJumpState ) noexcept {
@@ -607,6 +742,40 @@ const char* Attach( Fix fix, Module& module ) {
 		}
 		return module.hooks[0].Attach( signature( "ServerFixes::ProcessCmdKeyValues" ), "ServerFixes::ProcessCmdKeyValues",
 			OnKeyValues, DataType::Bool, { DataType::Pointer, DataType::Pointer } );
+	case Fix::EnemyCollisionFollowsTeammates: {
+		if ( !__polyhook_HookDetour || !__polyhook_GetArgumentPointer || !__polyhook_GetArgumentInt64 ||
+			!__polyhook_SetArgumentInt64 || !__polyhook_GetOriginalAddr || !__s2sdk_FindConVar ||
+			!__s2sdk_GetConVarInt32 || !__s2sdk_EntPointerToEntHandle || !__s2sdk_IsValidEntHandle ||
+			!__s2sdk_EntHandleToEntPointer || !__s2sdk_GetSchemaOffset ) {
+			return "required movement classification or ConVar imports unavailable";
+		}
+		g_playerPawnChainOffset = s2sdk::GetSchemaOffset( "CPlayerPawnComponent", "__m_pChainEntity" );
+		g_pawnCollisionOffset = s2sdk::GetSchemaOffset( "CBaseEntity", "m_pCollision" );
+		g_collisionAttributeOffset = s2sdk::GetSchemaOffset( "CCollisionProperty", "m_collisionAttribute" );
+		g_interactsWithOffset = s2sdk::GetSchemaOffset( "VPhysicsCollisionAttribute_t", "m_nInteractsWith" );
+		g_solidTeammates = s2sdk::FindConVar( "mp_solid_teammates" );
+		if ( g_playerPawnChainOffset <= 0 || g_pawnCollisionOffset <= 0 || g_collisionAttributeOffset < 0 ||
+			g_interactsWithOffset < 0 || !g_solidTeammates ) {
+			return "movement owner/collision schema or mp_solid_teammates unavailable";
+		}
+		if ( const char* error = module.hooks[0].Attach( signature( "ServerFixes::PlayerSetupMove" ),
+			"ServerFixes::PlayerSetupMove", OnPlayerSetupMove, DataType::Int64,
+			{ DataType::Pointer, DataType::Pointer, DataType::Pointer }, false, HookPhases::Both ) ) {
+			return error;
+		}
+		if ( const char* error = module.hooks[1].Attach( signature( "ServerFixes::SetCollisionInteractsWith" ),
+			"ServerFixes::SetCollisionInteractsWith", OnSetCollisionInteractsWith, DataType::Void,
+			{ DataType::Pointer, DataType::Int64 } ) ) {
+			return error;
+		}
+		g_setCollisionInteractsWith = reinterpret_cast<SetCollisionInteractsWith>(
+			polyhook::GetOriginalAddr( module.hooks[1].owned ) );
+		if ( !g_setCollisionInteractsWith ) {
+			return "native collision setter trampoline unavailable";
+		}
+		g_enemyCollisionEnabled = true;
+		return nullptr;
+	}
 	default:
 		return "unsupported fix";
 	}
@@ -656,7 +825,23 @@ Status Update( Fix fix, bool enabled, bool mapReady ) noexcept {
 			return { false, "waiting for map start before querying engine schemas" };
 		}
 	}
+	if ( fix == Fix::EnemyCollisionFollowsTeammates && enabled && !mapReady ) {
+		g_enemyCollisionEnabled = false;
+		if ( module.armed && !RestoreEnemyCollisionMasks() ) {
+			module.error = "enemy collision mask restoration pending";
+			return { false, module.error };
+		}
+		return { false, "waiting for map start before querying engine schemas" };
+	}
 	if ( !enabled ) {
+		if ( fix == Fix::EnemyCollisionFollowsTeammates ) {
+			g_enemyCollisionEnabled = false;
+			if ( !RestoreEnemyCollisionMasks() ) {
+				module.attempted = true;
+				module.error = "enemy collision mask restoration pending";
+				return { false, module.error };
+			}
+		}
 		if ( fix == Fix::WaterJump ) {
 			g_afterWaterMove = {};
 		}
@@ -664,6 +849,10 @@ Status Update( Fix fix, bool enabled, bool mapReady ) noexcept {
 			ConfigureKeyValues( {} );
 		}
 		bool clean = module.Release();
+		if ( fix == Fix::EnemyCollisionFollowsTeammates && clean ) {
+			g_setCollisionInteractsWith = nullptr;
+			g_ownedMovementBits.clear();
+		}
 		if ( usesCategorize ) {
 			clean = ReleaseCategorizeIfUnused() && clean;
 		}
@@ -701,6 +890,9 @@ Status Update( Fix fix, bool enabled, bool mapReady ) noexcept {
 			}
 		}
 	}
+	if ( fix == Fix::EnemyCollisionFollowsTeammates && module.armed ) {
+		g_enemyCollisionEnabled = true;
+	}
 	if ( fix == Fix::RampBug && module.armed ) {
 		try {
 			const float standable = s2sdk::GetConVarFloat( g_rampStandable );
@@ -736,6 +928,13 @@ void OnMapEnd() noexcept {
 	g_cstvMapReady = false;
 	g_botSelectionDepth = 0;
 	g_afterWaterMove = {};
+	g_enemyCollisionEnabled = false;
+	if ( !g_ownedMovementBits.empty() ) {
+		(void)RestoreEnemyCollisionMasks();
+	}
+	g_enemyCollisionMovePawn = nullptr;
+	g_enemyCollisionMoveSetterObject = nullptr;
+	g_enemyCollisionMoveHandle = -1;
 	ramp::ResetMap();
 	g_jumpMapReady = false;
 	std::fill( g_lastJumps.begin(), g_lastJumps.end(), JumpStamp{} );
@@ -745,8 +944,22 @@ bool Shutdown() noexcept {
 	OnMapEnd();
 	ConfigureKeyValues( {} );
 	bool clean = true;
-	for ( auto& module : g_modules ) {
+	for ( std::size_t i = 0; i < g_modules.size(); ++i ) {
+		auto& module = g_modules[i];
+		if ( static_cast<Fix>( i ) == Fix::EnemyCollisionFollowsTeammates ) {
+			g_enemyCollisionEnabled = false;
+			if ( !RestoreEnemyCollisionMasks() ) {
+				module.attempted = true;
+				module.error = "enemy collision mask restoration pending";
+				clean = false;
+				continue;
+			}
+		}
 		const bool released = module.Release();
+		if ( static_cast<Fix>( i ) == Fix::EnemyCollisionFollowsTeammates && released ) {
+			g_setCollisionInteractsWith = nullptr;
+			g_ownedMovementBits.clear();
+		}
 		module.attempted = !released;
 		module.error = released ? nullptr : "native fix cleanup pending";
 		clean = released && clean;

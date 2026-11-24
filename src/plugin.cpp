@@ -65,6 +65,7 @@ std::array g_nativeModules{
 	NativeModule{ native_faults::Fix::BlankMap, "blank_map", "sf_blank_map", "Restarts the current map if match end leaves no transition queued.", false },
 	NativeModule{ native_faults::Fix::SlowAnimation, "slow_animation", "sf_slow_animation", "Refreshes maps before the game clock loses animation precision.", false },
 	NativeModule{ native_faults::Fix::RampBug, "rampbug", "sf_rampbug", "Repairs inconsistent slope traces during native player movement.", false },
+	NativeModule{ native_faults::Fix::EnemyCollisionFollowsTeammates, "enemy_collision_follows_teammates", "sf_enemy_collision_follows_teammates", "Uses teammate movement collision rules for enemies when enabled.", false },
 };
 
 ModuleStatus g_chat;

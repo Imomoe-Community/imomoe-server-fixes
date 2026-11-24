@@ -5,7 +5,7 @@
 
 namespace imomoe::server_fixes::native_faults {
 
-enum class Fix { Beam, Filter, Equip, FreeClient, HammerId, CstvBotQuota, WaterJump, JumpSpam, KeyValues, BlankMap, SlowAnimation, RampBug, Count };
+enum class Fix { Beam, Filter, Equip, FreeClient, HammerId, CstvBotQuota, WaterJump, JumpSpam, KeyValues, BlankMap, SlowAnimation, RampBug, EnemyCollisionFollowsTeammates, Count };
 
 struct Status {
 	bool available;

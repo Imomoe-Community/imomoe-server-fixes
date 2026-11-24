@@ -80,19 +80,25 @@
   - Detour 拦截 `engine2` 库中的 `CServerSideClient::ProcessCmdKeyValues`。
   - 基于令牌桶算法（Token Bucket）为每个连接独立计量请求速率（默认 10/s、突发 20、单条限制 1500 字节）。超额或超长指令直接被消费丢弃（返回 `true`），不影响正常游戏连接，且不粗暴踢出玩家。
 
-#### 10. 比赛结束换图恢复 (`sf_blank_map`，默认 0)
+#### 10. 敌人移动碰撞跟随队友规则 (`sf_enemy_collision_follows_teammates`，默认 0)
+
+- **用途**：让敌对玩家之间的移动碰撞采用当前 `mp_solid_teammates` 规则；不更改队伍身份、伤害、世界碰撞或子弹碰撞。
+- **用法**：默认关闭。服务器控制台执行 `sf_enemy_collision_follows_teammates 1` 开启，执行 `sf_enemy_collision_follows_teammates 0` 恢复敌人原生规则。开启后实时读取 `mp_solid_teammates`，因此其 0/1/2 设置仍由引擎规则决定。
+- **实现**：在原生玩家移动分类生成期间，仅调整参与玩家移动碰撞筛选的 `CONTENTS_PLAYER` 与必要的队伍移动分类位；其余原生分类位保持不变，并经引擎原 setter 触发网络状态更新。关闭、卸载和换图时恢复仍由本模块持有的位，不覆盖其他分类位或外部更新。
+
+#### 11. 比赛结束换图恢复 (`sf_blank_map`，默认 0)
 
 - **引擎缺陷**：在特定模式下比赛结束（Match End）时，若配置未提供下一个目标地图且引擎自身没有排队切换关卡，服务端可能会停留在黑屏或无响应状态。
 - **修复方案**：
   - 监听 `engine2` 中的关卡切换排队状态。若比赛已结束、下一个关卡目标为空且引擎原生未安排换图队列，在超时后自动重新加载当前地图以恢复循环。原生安排的换图流程具有更高优先级。
 
-#### 11. 长图动画时钟刷新 (`sf_slow_animation`，默认 0)
+#### 12. 长图动画时钟刷新 (`sf_slow_animation`，默认 0)
 
 - **引擎缺陷**：在长期不换图的死斗、挂机、KZ 或 Surf 服务器上，随着游戏时钟持续累积，单精度浮点数时间戳精度下降，导致骨骼动画、投掷物飞行或移动视觉出现严重顿挫与卡顿（Slow Animation Bug）。
 - **修复方案**：
   - 空服地图默认运行 30 分钟且连续 5 分钟无真人后可刷新。有人时，引擎时钟达到 180 分钟后优先等下一场比赛；等待 120 分钟仍未开始新比赛时，提前 2 分钟通知并等回合边界，最多再等 10 分钟。原生换图优先；重载同一地图且时限基准未变时保留剩余时间。
 
-#### 12. 空闲客户端槽位修复 (`sf_free_client_fix`，默认 0)
+#### 13. 空闲客户端槽位修复 (`sf_free_client_fix`，默认 0)
 
 - **当前状态**：当前为不可用保留状态（默认值为 `0`）。
 - **设计考量**：在尚未完全确定错误拒绝对应的客户端槽位在引擎内部可以安全复用且不会造成状态残留或崩溃之前，本插件不盲目强行复用槽位，以防引发深层内存破坏。`sf_status` 会如实报告 `no verified reusable client at native rejection; no hook installed`。
@@ -187,19 +193,25 @@ Each module fails closed safely: if signatures do not match or the target instru
   - Detours `CServerSideClient::ProcessCmdKeyValues` in `engine2`.
   - Enforces a token-bucket rate limit per connection (default 10/s, burst 20, max 1500 bytes). Excess or oversized messages are dropped cleanly without disconnecting the client.
 
-#### 10. Blank Map Recovery (`sf_blank_map`, default 0)
+#### 10. Enemy Movement Collision Follows Teammate Rules (`sf_enemy_collision_follows_teammates`, default 0)
+
+- **Purpose**: Make enemy-to-enemy movement collision follow the current `mp_solid_teammates` rule. Team identity, damage, world collision, and bullet collision are unchanged.
+- **Usage**: Off by default. Run `sf_enemy_collision_follows_teammates 1` to enable or `sf_enemy_collision_follows_teammates 0` to restore native enemy rules. While enabled, the module reads `mp_solid_teammates` live, leaving its 0/1/2 behavior to the engine.
+- **Implementation**: During native player movement classification, changes only `CONTENTS_PLAYER` and the necessary team movement-classification bits; all other native classification bits are retained. It uses the engine setter so network state is notified. On disable, unload, and map change, it restores only bits still owned by this module and preserves other classification bits and external updates.
+
+#### 11. Blank Map Recovery (`sf_blank_map`, default 0)
 
 - **Engine Defect**: If match end yields an empty next-level target and the engine queues no transition, dedicated servers may remain indefinitely frozen on an empty screen.
 - **Repair**:
   - Monitors queued transitions in `engine2`. If the match has ended with no target and no transition is pending, reloads the current map after a brief timeout. Native transition queues always take precedence.
 
-#### 11. Long-Running Map Clock Refresh (`sf_slow_animation`, default 0)
+#### 12. Long-Running Map Clock Refresh (`sf_slow_animation`, default 0)
 
 - **Engine Defect**: On servers with very long uptimes (e.g. idle, KZ, surf), floating-point time degradation in the engine clock causes visual animation stutter and jitter (Slow Animation Bug).
 - **Repair**:
   - By default, an empty map can refresh after 30 minutes on the map and five minutes without human players. With players present, the engine clock reaching 180 minutes starts a wait for the next match. After 120 minutes without a new match, the server warns players two minutes ahead and waits up to 10 more minutes for a round boundary. Native map changes take priority. Reloading the same map keeps its remaining time when the time-limit baseline is unchanged.
 
-#### 12. Free Client Slot Reuse (`sf_free_client_fix`, default 0)
+#### 13. Free Client Slot Reuse (`sf_free_client_fix`, default 0)
 
 - **Status**: Reserved and disabled by default (`0`).
 - **Rationale**: Reusing client slots rejected by the engine risks corrupting connection state unless the slot is proven completely clean and recyclable. `sf_status` reports `no verified reusable client at native rejection; no hook installed`.

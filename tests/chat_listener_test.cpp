@@ -21,8 +21,6 @@ void Check( bool condition, std::string_view name ) {
 int main() {
 	using imomoe::server_fixes::chat::ListenerState;
 	using imomoe::server_fixes::chat::CanRunCallback;
-	using imomoe::server_fixes::chat::CompleteStatusCommandCleanup;
-	using imomoe::server_fixes::chat::RecordStatusCommandAddResult;
 	using imomoe::server_fixes::chat::RegisterListener;
 	using imomoe::server_fixes::chat::UnregisterListener;
 
@@ -47,51 +45,6 @@ int main() {
 	lifecycleActive = false;
 	Check( !CanRunCallback( lifecycleActive, liveCvar ), "End keeps a residual callback inactive even when the ConVar remains true" );
 	Check( !CanRunCallback( lifecycleActive, liveCvar ), "updates after End do not reopen chat registration" );
-
-	ListenerState status;
-	bool commandRegistered = false;
-	int statusRemovals = 0;
-	Check( !RecordStatusCommandAddResult( status, commandRegistered, false, true, [&] {
-			++statusRemovals;
-			return true;
-		} ), "false AddConsoleCommand fails startup even when its listener side effect was removed" );
-	Check( statusRemovals == 1 && !status.registered && !commandRegistered,
-		"failed command registration removes only the exact status listener and records clean state" );
-
-	bool statusListenerAttached = true;
-	Check( !RecordStatusCommandAddResult( status, commandRegistered, false, false, [&] {
-			statusListenerAttached = false;
-			return true;
-		} ) && !statusListenerAttached && !status.registered && !commandRegistered,
-		"an inactive engine entry can still have an SDK listener to roll back" );
-	Check( !RecordStatusCommandAddResult( status, commandRegistered, false, false, [] { return false; } ) &&
-		!status.registered, "failed Add with neither an engine callback nor an SDK listener is already clean" );
-
-	Check( !RecordStatusCommandAddResult( status, commandRegistered, false, true, [] { return false; } ),
-		"failed cleanup does not turn AddConsoleCommand failure into success" );
-	Check( status.registered && !commandRegistered,
-		"failed exact-listener removal remains pending for a later cleanup retry" );
-	Check( !CanRunCallback( false, true ), "a pending status callback remains inert after startup failure" );
-
-	ListenerState successfulStatus;
-	Check( RecordStatusCommandAddResult( successfulStatus, commandRegistered, true, true, [] { return true; } ),
-		"successful AddConsoleCommand owns its callback" );
-	Check( successfulStatus.registered && commandRegistered,
-		"successful status command tracks callback and command ownership separately" );
-
-	bool cleanupCommandRegistered = true;
-	Check( CompleteStatusCommandCleanup( cleanupCommandRegistered, [] { return false; }, [] { return false; } ),
-		"last-listener cleanup treats RemoveCommand=false as success after no callbacks remain" );
-	Check( !cleanupCommandRegistered, "removed engine command is no longer tracked as owned" );
-
-	cleanupCommandRegistered = true;
-	bool removeForeignCommandCalled = false;
-	Check( CompleteStatusCommandCleanup( cleanupCommandRegistered, [] { return true; }, [&] {
-		removeForeignCommandCalled = true;
-		return true;
-	} ), "a foreign command callback survives without failing this plugin's cleanup" );
-	Check( !removeForeignCommandCalled && !cleanupCommandRegistered,
-		"foreign command remains untouched after this plugin removes its own listener" );
 
 	std::cout << "chat listener lifecycle checks passed\n";
 	return 0;

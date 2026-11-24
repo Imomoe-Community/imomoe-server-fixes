@@ -80,7 +80,6 @@ std::uint64_t g_gameBanFixConVar = 0;
 bool g_chatListenerRegistered = false;
 bool g_statusCommandRegistered = false;
 bool g_lifecycleActive = false;
-imomoe::server_fixes::chat::ListenerState g_statusListener;
 
 bool IsTrueValue( std::string_view value ) noexcept {
 	return value == "1" || value == "true" || value == "TRUE" || value == "yes" || value == "on";
@@ -215,40 +214,32 @@ s2sdk::ResultType OnStatusCommand( std::int32_t slot, s2sdk::ConCommandContext c
 }
 
 bool RegisterStatusCommand() noexcept {
-	try {
-		const plg::string name( kStatusCommand );
-		if ( s2sdk::HasConsoleCommandCallbacks( name ) ) {
-			return false;
-		}
-		const bool commandAdded = s2sdk::AddConsoleCommand( name, plg::string( "Show ServerFixes capability status" ),
-			s2sdk::ConVarFlag::None, OnStatusCommand, s2sdk::HookMode::Pre );
-		const bool callbackPresent = s2sdk::HasConsoleCommandCallbacks( name );
-		const bool registered = imomoe::server_fixes::chat::RecordStatusCommandAddResult(
-			g_statusListener, g_statusCommandRegistered, commandAdded, callbackPresent, [&] {
-				return s2sdk::RemoveCommandListener( name, OnStatusCommand, s2sdk::HookMode::Pre );
-			} );
-		return registered;
-	} catch ( ... ) {
-		g_statusListener.reason = "status command registration threw";
+	if ( g_statusCommandRegistered ) {
 		return false;
 	}
+	try {
+		g_statusCommandRegistered = s2sdk::AddConsoleCommand( plg::string( kStatusCommand ),
+			plg::string( "Show ServerFixes capability status" ),
+			s2sdk::ConVarFlag::None, OnStatusCommand, s2sdk::HookMode::Pre );
+	} catch ( ... ) {
+		return false;
+	}
+	return g_statusCommandRegistered;
 }
 
 bool UnregisterStatusCommand() noexcept {
-	bool listenerClean = true;
-	if ( g_statusListener.registered ) {
-		const plg::string name( kStatusCommand );
-		listenerClean = imomoe::server_fixes::chat::UnregisterListener( g_statusListener, [&] {
-			return s2sdk::RemoveCommandListener( name, OnStatusCommand, s2sdk::HookMode::Pre );
-		} );
+	if ( !g_statusCommandRegistered ) {
+		return true;
 	}
-	if ( !listenerClean ) {
+	try {
+		if ( !s2sdk::RemoveCommand( plg::string( kStatusCommand ), OnStatusCommand ) ) {
+			return false;
+		}
+	} catch ( ... ) {
 		return false;
 	}
-	const plg::string name( kStatusCommand );
-	return imomoe::server_fixes::chat::CompleteStatusCommandCleanup( g_statusCommandRegistered,
-		[&] { return s2sdk::HasConsoleCommandCallbacks( name ); },
-		[&] { return s2sdk::RemoveCommand( name, OnStatusCommand ); } );
+	g_statusCommandRegistered = false;
+	return true;
 }
 
 void RefreshModuleStates( bool includeDiagnostics ) noexcept {
@@ -314,7 +305,6 @@ public:
 			if ( __s2sdk_CreateConVarBool == nullptr || __s2sdk_GetConVarValue == nullptr ||
 				__s2sdk_AddCommandListener == nullptr || __s2sdk_RemoveCommandListener == nullptr ||
 				__s2sdk_AddConsoleCommand == nullptr || __s2sdk_RemoveCommand == nullptr ||
-				__s2sdk_HasConsoleCommandCallbacks == nullptr ||
 				__s2sdk_IsClientInGame == nullptr ) {
 				return plg::PluginResult{ "Required S2SDK imports are unavailable" };
 			}
@@ -433,7 +423,7 @@ public:
 			if ( g_chatListenerRegistered ) {
 				(void)UnregisterChatListener();
 			}
-			if ( g_statusListener.registered || g_statusCommandRegistered ) {
+			if ( g_statusCommandRegistered ) {
 				(void)UnregisterStatusCommand();
 			}
 			return {};

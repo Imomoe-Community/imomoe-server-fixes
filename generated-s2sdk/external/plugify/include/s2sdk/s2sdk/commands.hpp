@@ -81,19 +81,6 @@ namespace s2sdk {
     return __s2sdk_RemoveCommandListener(name, callback, type);
   }
 
-  using _HasConsoleCommandCallbacks = bool (*)(const plg::string&);
-}
-extern "C" PLUGIN_API s2sdk::_HasConsoleCommandCallbacks __s2sdk_HasConsoleCommandCallbacks;
-namespace s2sdk {
-  /**
-   * @brief Local compatibility bridge: checks live callbacks, not retained command names.
-   * @param name (string): Command name.
-   * @return bool: Whether the engine command has callbacks registered.
-   */
-  inline bool HasConsoleCommandCallbacks(const plg::string& name) {
-    return __s2sdk_HasConsoleCommandCallbacks(name);
-  }
-
   using _AddCommandListener = bool (*)(const plg::string&, ConCommandCallback, HookMode);
 }
 extern "C" PLUGIN_API s2sdk::_AddCommandListener __s2sdk_AddCommandListener;

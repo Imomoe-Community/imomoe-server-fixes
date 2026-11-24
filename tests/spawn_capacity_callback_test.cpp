@@ -141,18 +141,16 @@ struct SchemaSetCall {
 };
 std::vector<SchemaSetCall> g_schemaSetCalls;
 std::vector<std::string> g_commandReplies;
-std::vector<std::string> g_registeredCommands;
-std::vector<std::string> g_inactiveCommandNames;
 struct FakeCommandListener {
 	std::string name;
 	s2sdk::ConCommandCallback callback{};
 	s2sdk::HookMode mode{};
 };
+std::vector<FakeCommandListener> g_registeredCommands;
+std::vector<std::string> g_inactiveCommandNames;
 std::vector<FakeCommandListener> g_commandListeners;
-enum class AddCommandFailure { None, Reject, ThrowAfterAdding };
-AddCommandFailure g_secondCommandFailure{};
+bool g_secondCommandThrows{};
 bool g_fakeRemoveCommandFails{};
-bool g_fakeRemoveCommandReturnsFalseAfterRemoval{};
 
 FakeEntity* FindEntity( std::int32_t handle ) noexcept {
 	const auto found = std::find_if( g_entities.begin(), g_entities.end(), [handle]( const FakeEntity& entity ) {
@@ -412,7 +410,7 @@ public:
 	uint32 GetPlayerTickBase( CPlayerSlot ) override {
 		return 0;
 	}
-	void GetClientVisibilityInfo( CPlayerSlot, vis_info_t* ) override {
+	void FillCommandRecvStatus( CPlayerSlot, void* ) override {
 	}
 	void ClientSvcUserMessage( CPlayerSlot, int, uint32, const void* ) override {
 	}
@@ -606,44 +604,37 @@ void FakeReplyToCommand( s2sdk::ConCommandContext, std::int32_t, const plg::stri
 	g_commandReplies.emplace_back( message.data(), message.size() );
 }
 
+void Require( bool condition, std::string_view message );
+
 bool FakeAddConsoleCommand( const plg::string& name, const plg::string&, s2sdk::ConVarFlag,
-	s2sdk::ConCommandCallback, s2sdk::HookMode ) {
-	const bool secondCommand = std::string_view( name.data(), name.size() ) == "sf_spawn_list";
-	if ( secondCommand && g_secondCommandFailure == AddCommandFailure::Reject ) {
+	s2sdk::ConCommandCallback callback, s2sdk::HookMode mode ) {
+	const std::string_view view( name.data(), name.size() );
+	if ( std::any_of( g_registeredCommands.begin(), g_registeredCommands.end(),
+		[view]( const FakeCommandListener& registered ) { return registered.name == view; } ) ) {
 		return false;
 	}
-	g_registeredCommands.emplace_back( name.data(), name.size() );
-	if ( secondCommand && g_secondCommandFailure == AddCommandFailure::ThrowAfterAdding ) {
+	if ( view == "sf_spawn_list" && g_secondCommandThrows ) {
 		throw std::runtime_error( "injected command registration exception" );
 	}
+	g_registeredCommands.push_back( { std::string( view ), callback, mode } );
+	std::erase( g_inactiveCommandNames, view );
 	return true;
 }
 
-bool FakeRemoveCommand( const plg::string& name, s2sdk::ConCommandCallback ) {
+bool FakeRemoveCommand( const plg::string& name, s2sdk::ConCommandCallback callback ) {
 	if ( g_fakeRemoveCommandFails ) {
 		return false;
 	}
 	const std::string_view view( name.data(), name.size() );
-	g_registeredCommands.erase( std::remove_if( g_registeredCommands.begin(), g_registeredCommands.end(),
-		[view]( const std::string& registered ) { return registered == view; } ), g_registeredCommands.end() );
-	return !g_fakeRemoveCommandReturnsFalseAfterRemoval;
-}
-
-bool FakeHasConsoleCommandCallbacks( const plg::string& name ) {
-	const std::string_view view( name.data(), name.size() );
-	return std::any_of( g_registeredCommands.begin(), g_registeredCommands.end(),
-		[view]( const std::string& registered ) { return registered == view; } );
-}
-
-plg::vector<plg::string> FakeGetAllConCommands( s2sdk::ConVarFlag ) {
-	plg::vector<plg::string> result;
-	for ( const auto& name : g_registeredCommands ) {
-		result.push_back( plg::string( name ) );
+	const auto found = std::find_if( g_registeredCommands.begin(), g_registeredCommands.end(),
+		[view]( const FakeCommandListener& registered ) { return registered.name == view; } );
+	if ( found == g_registeredCommands.end() ) {
+		return false;
 	}
-	for ( const auto& name : g_inactiveCommandNames ) {
-		result.push_back( plg::string( name ) );
-	}
-	return result;
+	Require( found->callback == callback, "RemoveCommand must only be called for a command with our callback" );
+	g_inactiveCommandNames.push_back( found->name );
+	g_registeredCommands.erase( found );
+	return true;
 }
 
 bool FakeAddCommandListener( const plg::string& name, s2sdk::ConCommandCallback callback, s2sdk::HookMode mode ) {
@@ -735,8 +726,6 @@ void InstallImports() {
 	plg::plugin::GetLocation = FakePluginLocation;
 	__s2sdk_AddConsoleCommand = FakeAddConsoleCommand;
 	__s2sdk_RemoveCommand = FakeRemoveCommand;
-	__s2sdk_HasConsoleCommandCallbacks = FakeHasConsoleCommandCallbacks;
-	__s2sdk_GetAllConCommands = FakeGetAllConCommands;
 	__s2sdk_AddCommandListener = FakeAddCommandListener;
 	__s2sdk_RemoveCommandListener = FakeRemoveCommandListener;
 	__s2sdk_HookEvent = FakeHookEvent;
@@ -1077,7 +1066,7 @@ void TestJointeamUsesGlobalPreAndFailureEventAsRetryBoundary() {
 	Require( g_commandListeners.empty(), "runtime-hook cleanup must remove the global Pre listener by its empty name" );
 }
 
-void TestAdminCommandCleanupUsesCallbackAbsencePostcondition() {
+void TestAdminCommandCleanupAndReregistration() {
 	using namespace imomoe::server_fixes::spawn_capacity;
 	ResetSpawnModule( "de_poseidon" );
 	std::string error;
@@ -1090,41 +1079,40 @@ void TestAdminCommandCleanupUsesCallbackAbsencePostcondition() {
 		"cleanup must retain RemoveCommand=false context while callbacks remain registered" );
 
 	g_fakeRemoveCommandFails = false;
-	g_inactiveCommandNames = g_registeredCommands; // The engine keeps these names after callback removal.
-	g_fakeRemoveCommandReturnsFalseAfterRemoval = true;
-	error.clear();
-	Require( UnregisterAdminCommands( error ) && g_registeredCommands.empty() && error.empty(),
-		"RemoveCommand=false is clean when HasConsoleCommandCallbacks confirms the owned callbacks are absent" );
-	g_fakeRemoveCommandReturnsFalseAfterRemoval = false;
-
-	Require( RegisterAdminCommands( error ) && g_registeredCommands == g_inactiveCommandNames,
+	Require( UnregisterAdminCommands( error ) && g_registeredCommands.empty() && error.empty() &&
+		g_inactiveCommandNames.size() == 4, "successful retry removes all callbacks but leaves reusable engine names" );
+	Require( RegisterAdminCommands( error ) && g_registeredCommands.size() == 4 && g_inactiveCommandNames.empty(),
 		"all four admin commands can register again when only their names remain" );
 	Require( UnregisterAdminCommands( error ), "re-registered admin commands should unload" );
 
-	g_registeredCommands.emplace_back( "sf_spawn_list" );
+	g_registeredCommands.push_back( { "sf_spawn_list", nullptr, s2sdk::HookMode::Pre } );
 	Require( !RegisterAdminCommands( error ) && error.find( "sf_spawn_list" ) != std::string::npos &&
-		g_registeredCommands == std::vector<std::string>{ "sf_spawn_list" },
+		g_registeredCommands.size() == 1 && g_registeredCommands.front().name == "sf_spawn_list" &&
+		g_registeredCommands.front().callback == nullptr,
 		"an active foreign command blocks registration and survives rollback" );
 }
 
 void TestPartialAdminRegistrationRemainsOwnedAfterFailedRollback() {
 	using namespace imomoe::server_fixes::spawn_capacity;
-	for ( const auto failure : { AddCommandFailure::Reject, AddCommandFailure::ThrowAfterAdding } ) {
+	for ( const bool throws : { false, true } ) {
 		ResetSpawnModule( "de_poseidon" );
-		g_secondCommandFailure = failure;
+		g_secondCommandThrows = throws;
+		if ( !throws ) {
+			g_registeredCommands.push_back( { "sf_spawn_list", nullptr, s2sdk::HookMode::Pre } );
+		}
 		g_fakeRemoveCommandFails = true;
 		std::string error;
-		Require( !RegisterAdminCommands( error ) && error.find( "could not confirm removal" ) != std::string::npos,
+		Require( !RegisterAdminCommands( error ) && error.find( "could not remove console command sf_spawn_add" ) != std::string::npos,
 			"partial registration should report the failed rollback" );
-		const std::vector<std::string> expected = failure == AddCommandFailure::Reject ?
-			std::vector<std::string>{ "sf_spawn_add" } : std::vector<std::string>{ "sf_spawn_add", "sf_spawn_list" };
-		Require( g_registeredCommands == expected && !Shutdown(),
+		Require( !Shutdown(),
 			"shutdown must report callbacks left behind by a failed rollback" );
 
 		g_fakeRemoveCommandFails = false;
-		g_secondCommandFailure = AddCommandFailure::None;
-		Require( Shutdown() && g_registeredCommands.empty(),
-			"the next shutdown retries and removes every partially registered callback" );
+		g_secondCommandThrows = false;
+		Require( Shutdown() && ( throws ? g_registeredCommands.empty() :
+			( g_registeredCommands.size() == 1 && g_registeredCommands.front().name == "sf_spawn_list" &&
+				g_registeredCommands.front().callback == nullptr ) ),
+			"the next shutdown removes the successfully added command and leaves any foreign command alone" );
 	}
 }
 
@@ -2014,7 +2002,7 @@ int main() {
 	TestNegativePlayerHandlesRetainJoinRetryIdentity();
 	TestPendingRetryPreservesForeignRawClientCommandVeto();
 	TestJointeamUsesGlobalPreAndFailureEventAsRetryBoundary();
-	TestAdminCommandCleanupUsesCallbackAbsencePostcondition();
+	TestAdminCommandCleanupAndReregistration();
 	TestPartialAdminRegistrationRemainsOwnedAfterFailedRollback();
 	for ( const auto* map : { "de_poseidon", "de_mirage", "cs_office", "workshop_arena" } ) {
 		TestNativeRefreshReadbackFollowsActualTeamAllowance( map );

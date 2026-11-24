@@ -202,7 +202,6 @@ bool EqualsAsciiCaseInsensitive( std::string_view left, std::string_view right )
 
 bool HasRequiredImports() noexcept {
 	return __s2sdk_AddConsoleCommand != nullptr && __s2sdk_RemoveCommand != nullptr &&
-		__s2sdk_HasConsoleCommandCallbacks != nullptr &&
 		__s2sdk_AddCommandListener != nullptr && __s2sdk_RemoveCommandListener != nullptr &&
 		__s2sdk_HookEvent != nullptr && __s2sdk_UnhookEvent != nullptr &&
 		__s2sdk_GetEventPlayerSlot != nullptr && __s2sdk_GetEventInt != nullptr &&
@@ -2199,16 +2198,7 @@ bool UnregisterAdminCommands( std::string& error ) noexcept {
 			removalThrew = true;
 		}
 
-		bool stillPresent = true;
-		bool presenceKnown = false;
-		try {
-			if ( __s2sdk_HasConsoleCommandCallbacks ) {
-				stillPresent = s2sdk::HasConsoleCommandCallbacks( plg::string( name ) );
-				presenceKnown = true;
-			}
-		} catch ( ... ) {
-		}
-		if ( presenceKnown && !stillPresent ) {
+		if ( removed ) {
 			owned = false;
 			continue;
 		}
@@ -2216,11 +2206,8 @@ bool UnregisterAdminCommands( std::string& error ) noexcept {
 		clean = false;
 		if ( error.empty() ) {
 			try {
-				error = "could not confirm removal of console command " + std::string( name ) +
-					( !presenceKnown ? "; callback-presence readback failed" :
-						( removalThrew ? "; RemoveCommand threw and callback remains" :
-							( removed ? "; RemoveCommand returned true but callback remains" :
-								"; RemoveCommand returned false and callback remains" ) ) );
+				error = "could not remove console command " + std::string( name ) +
+					( removalThrew ? "; RemoveCommand threw" : "; RemoveCommand returned false" );
 			} catch ( ... ) {
 			}
 		}
@@ -2237,15 +2224,10 @@ bool RegisterAdminCommands( std::string& error ) noexcept {
 	}
 	try {
 		for ( auto& [name, callback, owned] : g_adminCommands ) {
-			const plg::string commandName( name );
-			if ( s2sdk::HasConsoleCommandCallbacks( commandName ) ) {
-				error = "console command already has callbacks: " + std::string( name );
-				break;
-			}
 			const plg::string description( "Manage this map's ServerFixes-owned spawn points" );
-			owned = true; // Add can fail or throw after installing a callback.
-			if ( !s2sdk::AddConsoleCommand( commandName, description, s2sdk::ConVarFlag::None,
-				callback, s2sdk::HookMode::Pre ) || !s2sdk::HasConsoleCommandCallbacks( commandName ) ) {
+			owned = s2sdk::AddConsoleCommand( plg::string( name ), description,
+				s2sdk::ConVarFlag::None, callback, s2sdk::HookMode::Pre );
+			if ( !owned ) {
 				error = "could not register console command: " + std::string( name );
 				break;
 			}

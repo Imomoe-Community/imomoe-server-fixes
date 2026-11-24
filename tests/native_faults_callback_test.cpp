@@ -222,7 +222,7 @@ void CheckRampMovement() {
 	}, static_cast<int>( offsetof( Services, cache ) ), static_cast<int>( offsetof( Services, pawn ) ),
 		static_cast<int>( offsetof( Pawn, ground ) ), static_cast<int>( offsetof( Pawn, moveType ) ),
 		static_cast<int>( offsetof( Pawn, waterLevel ) ) );
-	CMoveData move{};
+	auto move = CMoveData();
 	move.m_nTargetTick = 11;
 	const Vector start( 2.0f, 0.0f, 3.0f ), end( 2.0f, 0.0f, 1.0f );
 	move.m_vecAbsOrigin = start;

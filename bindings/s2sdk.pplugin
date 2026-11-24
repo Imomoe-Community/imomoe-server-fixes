@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/untrustedmodders/plugify/refs/heads/main/schemas/plugin.schema.json",
-  "version": "3.4.2",
+  "version": "3.5.1",
   "name": "s2sdk",
   "description": "Provides functionality for other plugins from Source 2 engine",
   "author": "untrustedmodders",
@@ -973,24 +973,6 @@
       }
     },
     {
-      "paramTypes": [
-        {
-          "ref": false,
-          "description": "Command name.",
-          "type": "string",
-          "name": "name"
-        }
-      ],
-      "funcName": "HasConsoleCommandCallbacks",
-      "name": "HasConsoleCommandCallbacks",
-      "retType": {
-        "description": "Whether the engine command has callbacks registered.",
-        "type": "bool"
-      },
-      "group": "Commands",
-      "description": "Local compatibility bridge: checks live callbacks, not retained command names."
-    },
-    {
       "name": "FindConVar",
       "group": "Cvars",
       "description": "Searches for a console variable.",
@@ -1802,23 +1784,6 @@
       "group": "Clients",
       "description": "Respawns a player.",
       "funcName": "RespawnClient",
-      "paramTypes": [
-        {
-          "name": "playerSlot",
-          "type": "int32",
-          "ref": false,
-          "description": "The index of the player's slot to respawn."
-        }
-      ],
-      "retType": {
-        "type": "void"
-      }
-    },
-    {
-      "name": "ForceRespawnClient",
-      "group": "Clients",
-      "description": "Forces a full engine respawn for a player, including when the current pawn is alive. Supported in CS2.",
-      "funcName": "ForceRespawnClient",
       "paramTypes": [
         {
           "name": "playerSlot",

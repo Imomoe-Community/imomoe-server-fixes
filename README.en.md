@@ -71,7 +71,7 @@ See [Native Faults Documentation](docs/NATIVE_FAULTS.md#english) for full root-c
 
 - **Dedicated Server**: Counter-Strike 2 Dedicated Server (Windows x64 / Linux x64)
 - **Plugify Host**: `>= 3.1.0`
-- **S2SDK**: Use the [paired S2SDK 3.4.2](docs/DEPENDENCIES.md) for the full feature set.
+- **S2SDK**: Requires S2SDK `>= 3.4.3`; the [paired build uses official 3.5.1](docs/DEPENDENCIES.md).
 - **PolyHook**: Minimum `>= 2.5.9`; Windows and Linux were validated with the official [`2.5.9`](https://github.com/untrustedmodders/plugify-plugin-polyhook/releases/tag/v2.5.9) release.
 
 #### Deployment Structure
@@ -176,12 +176,14 @@ cmake --build build --config Release
 
 #### 3. Paired Release Packaging
 
+Pass the official S2SDK source and its paired build. On Windows, use a Visual Studio x64 generator to build S2SDK. On Linux, build S2SDK at the same absolute paths inside a Steam Runtime GCC 14 container and pass that image to the packager.
+
 ```powershell
 # Windows
-python tools/build_paired.py --funrounds-source <path-to-funrounds> --cs2-bin <path-to-game/bin/win64>
+python tools/build_paired.py --sdk-source <s2sdk-source> --sdk-build <s2sdk-build> --cs2-bin <game/bin/win64>
 
 # Linux (with Docker)
-python3 tools/build_paired.py --funrounds-source <path-to-funrounds> --cs2-bin <path-to-game/bin/linuxsteamrt64>
+python3 tools/build_paired.py --sdk-source <s2sdk-source> --sdk-build <s2sdk-build> --steamrt-image <image> --cs2-bin <game/bin/linuxsteamrt64>
 ```
 
 Artifacts are generated into `dist/imomoe-server-fixes-<platform>-<name>.zip`.

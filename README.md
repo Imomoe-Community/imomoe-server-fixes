@@ -75,7 +75,7 @@
 
 - **游戏服务端 / Dedicated Server**：Counter-Strike 2 Dedicated Server (Windows x64 / Linux x64)
 - **Plugify 框架 / Plugify Host**：`>= 3.1.0`
-- **基础 SDK 依赖 / S2SDK**：完整功能使用 [配对的 S2SDK 3.4.2](docs/DEPENDENCIES.md)。<br><sub><sup>Use the [paired S2SDK 3.4.2](docs/DEPENDENCIES.md) for the full feature set.</sup></sub>
+- **基础 SDK 依赖 / S2SDK**：要求 S2SDK `>= 3.4.3`；[配对构建使用官方 3.5.1](docs/DEPENDENCIES.md)。<br><sub><sup>Requires S2SDK `>= 3.4.3`; the [paired build uses official 3.5.1](docs/DEPENDENCIES.md).</sup></sub>
 - **底层 Hook 插件 / PolyHook**：最低 `>= 2.5.9`，双端配对验证使用官方 [`2.5.9`](https://github.com/untrustedmodders/plugify-plugin-polyhook/releases/tag/v2.5.9)。<br><sub><sup>Minimum `>= 2.5.9`; Windows and Linux were validated with the official `2.5.9` release.</sup></sub>
 
 #### 部署结构 / Deployment Structure
@@ -188,12 +188,14 @@ cmake --build build --config Release
 
 #### 3. 自动化发布打包 / Paired Release Packaging
 
+使用官方 S2SDK 的源码和配对构建。Windows 使用 Visual Studio x64 生成器构建 S2SDK；Linux 在 Steam Runtime GCC 14 容器内以相同绝对路径构建，再将该镜像传给打包脚本。<br><sub><sup>Pass the official S2SDK source and its paired build. On Windows, use a Visual Studio x64 generator to build S2SDK. On Linux, build S2SDK at the same absolute paths inside a Steam Runtime GCC 14 container and pass that image to the packager.</sup></sub>
+
 ```powershell
 # Windows
-python tools/build_paired.py --funrounds-source <path-to-funrounds> --cs2-bin <path-to-game/bin/win64>
+python tools/build_paired.py --sdk-source <s2sdk-source> --sdk-build <s2sdk-build> --cs2-bin <game/bin/win64>
 
 # Linux (带 Docker 环境)
-python3 tools/build_paired.py --funrounds-source <path-to-funrounds> --cs2-bin <path-to-game/bin/linuxsteamrt64>
+python3 tools/build_paired.py --sdk-source <s2sdk-source> --sdk-build <s2sdk-build> --steamrt-image <image> --cs2-bin <game/bin/linuxsteamrt64>
 ```
 
 产物将输出至 `dist/imomoe-server-fixes-<platform>-<name>.zip`。

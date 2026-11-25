@@ -56,8 +56,11 @@ def main() -> None:
                           help="use a FunRounds checkout to build its pinned paired SDK")
     parser.add_argument("--sdk-build", type=Path, help="configured build of --sdk-source")
     parser.add_argument("--steamrt-image", help="Steam Runtime GCC 14 image used for --sdk-build on Linux")
-    parser.add_argument("--generator", type=Path, help="plugify-gen v1.2.15 executable for --funrounds-source")
-    parser.add_argument("--work-name", help="new unique name under this repo's .work/; defaults to the current timestamp")
+    parser.add_argument("--generator", type=Path,
+                        help="plugify-gen v1.2.15 for --funrounds-source; otherwise search IMOMOE_WORK_ROOT/tools, "
+                             "then ServerFixes and FunRounds .work/tools")
+    parser.add_argument("--work-name", help="unique session name in IMOMOE_WORK_ROOT/sessions or checkout-local "
+                                            ".work; defaults to the current timestamp")
     parser.add_argument("--resume-source", type=Path, help="reuse a clean pinned SDK source checkout for the selected host")
     parser.add_argument("--cs2-bin", type=Path, help="CS2 game/bin/win64 or game/bin/linuxsteamrt64 for callback tests; defaults to CS2_GAME_BIN")
     args = parser.parse_args()
@@ -65,7 +68,10 @@ def main() -> None:
     work_name = args.work_name or datetime.now().strftime("%Y%m%d-%H%M%S")
     if not work_name or Path(work_name).name != work_name or work_name in {".", ".."}:
         parser.error("--work-name must be one directory name, not a path")
-    work = ROOT / ".work" / f"serverfixes-{work_name}"
+    raw_work_root = os.environ.get("IMOMOE_WORK_ROOT", "").strip()
+    work_root = Path(raw_work_root).expanduser().resolve() if raw_work_root else None
+    sessions = work_root / "sessions" if work_root else None
+    work = (sessions if sessions else ROOT / ".work") / f"serverfixes-{work_name}"
     if work.exists():
         parser.error(f"Work directory already exists; choose another --work-name: {work}")
     sdk_args = None
@@ -76,12 +82,16 @@ def main() -> None:
         if not (main_source / "runtime/s2sdk.json").is_file():
             parser.error(f"Not a FunRounds checkout: {main_source}")
         executable = "plugify-gen.exe" if sys.platform == "win32" else "plugify-gen"
+        tool_dirs = [ROOT / ".work/tools", main_source / ".work/tools"]
+        if work_root:
+            tool_dirs.insert(0, work_root / "tools")
         generator = args.generator.resolve() if args.generator else next(
-            (path for checkout in (ROOT, main_source)
-             if (path := checkout / ".work/tools/plugify-gen-v1.2.15" / executable).is_file()), None)
+            (path for directory in tool_dirs
+             if (path := directory / "plugify-gen-v1.2.15" / executable).is_file()), None)
         if generator is None or not generator.is_file():
-            parser.error("Install plugify-gen 1.2.15 in .work/tools or pass --generator PATH")
-        sdk_work = main_source / ".work" / f"serverfixes-sdk-{work_name}"
+            parser.error("Install plugify-gen 1.2.15 in plugify-gen-v1.2.15 under IMOMOE_WORK_ROOT/tools "
+                         "or a checkout's .work/tools, or pass --generator PATH")
+        sdk_work = (sessions if sessions else main_source / ".work") / f"serverfixes-sdk-{work_name}"
         if sdk_work.exists():
             parser.error(f"SDK work directory already exists; choose another --work-name: {sdk_work}")
         sdk = load_sdk(main_source)
@@ -154,23 +164,42 @@ def main() -> None:
         else:
             container = args.steamrt_image
 
-    def in_container(path: str | Path) -> str:
+    if container:
+        mounts = [(ROOT, "/serverfixes" if main_source else str(ROOT), ""),
+                  (cs2_bin, "/cs2-bin", ":ro")]
         if main_source:
-            return str(path).replace(str(ROOT), "/serverfixes").replace(str(main_source), "/workspace")
-        return str(path)
+            mounts.append((main_source, "/workspace", ""))
+        else:
+            mounts += [(path, str(path), ":ro") for path in (source, build)]
+        if sessions:
+            # Keep external SDK paths identical to those in the SDK builder's CMake cache.
+            mounts.append((work, str(work), ""))
+            if main_source:
+                mounts.append((sdk_work, str(sdk_work), ""))
+                if args.resume_source and not source.is_relative_to(main_source):
+                    mounts.append((source, str(source), ":ro"))
+        volume_args = [arg for host, guest, mode in mounts for arg in ("--volume", f"{host}:{guest}{mode}")]
+        path_mappings = sorted(mounts, key=lambda mount: len(mount[0].parts), reverse=True)
+
+    def in_container(item: str | Path) -> str:
+        value = str(item)
+        flag, sep, raw_path = value.partition("=") if value.startswith("-D") else ("", "", value)
+        path = Path(raw_path)
+        for host, guest, _ in path_mappings:
+            if path.is_relative_to(host):
+                if guest == str(host):
+                    return value
+                if path == host:
+                    return flag + sep + guest
+                return f"{flag}{sep}{guest}/{path.relative_to(host).as_posix()}"
+        return value
 
     def cmake(command: list[str | Path], *, test_runtime: bool = False) -> None:
         if container:
-            mounts = ["--volume", f"{ROOT}:{in_container(ROOT)}", "--volume", f"{cs2_bin}:/cs2-bin:ro"]
-            if main_source:
-                mounts += ["--volume", f"{main_source}:/workspace"]
-            else:
-                for path in (source, build):
-                    mounts += ["--volume", f"{path}:{path}:ro"]
             runtime = in_container(source_sdk / "lib/linuxsteamrt64")
             run(["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
                  "--env", "HOME=/tmp", "--env", f"LD_LIBRARY_PATH=/cs2-bin:{runtime}",
-                 *mounts, "--workdir", in_container(ROOT), container, *map(in_container, command)])
+                 *volume_args, "--workdir", in_container(ROOT), container, *map(in_container, command)])
         elif test_runtime:
             old_path = os.environ.get("PATH", "")
             os.environ["PATH"] = str(cs2_bin) + os.pathsep + old_path

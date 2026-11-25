@@ -188,6 +188,10 @@ python3 tools/build_paired.py --sdk-source <s2sdk-source> --sdk-build <s2sdk-bui
 
 Artifacts are generated into `dist/imomoe-server-fixes-<platform>-<name>.zip`.
 
+Set `IMOMOE_WORK_ROOT` to put the build session in its `sessions/serverfixes-<name>` directory.
+With `--funrounds-source`, use a FunRounds SDK builder that supports shared work roots; its session goes in `sessions/serverfixes-sdk-<name>`.
+If the variable is unset or blank, the sessions stay in the respective ServerFixes and FunRounds `.work/` directories.
+
 - [Dependencies](docs/DEPENDENCIES.md) · [Native Faults](docs/NATIVE_FAULTS.md#english) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 ---

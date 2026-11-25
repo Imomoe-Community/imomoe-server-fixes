@@ -201,6 +201,9 @@ python3 tools/build_paired.py --sdk-source <s2sdk-source> --sdk-build <s2sdk-bui
 产物将输出至 `dist/imomoe-server-fixes-<platform>-<name>.zip`。
 <sub><sup>Artifacts generated into `dist/imomoe-server-fixes-<platform>-<name>.zip`.</sup></sub>
 
+设置 `IMOMOE_WORK_ROOT` 可将构建会话移至该目录的 `sessions/serverfixes-<name>`。使用 `--funrounds-source` 时，需选用支持共享工作目录的 FunRounds 构建脚本；SDK 会话位于 `sessions/serverfixes-sdk-<name>`。变量未设置或仅含空白时，两个会话分别保留在 ServerFixes 与 FunRounds 各自的 `.work/` 中。<br>
+<sub><sup>Set `IMOMOE_WORK_ROOT` to put the build session in its `sessions/serverfixes-<name>` directory. With `--funrounds-source`, use a FunRounds SDK builder that supports shared work roots; its session goes in `sessions/serverfixes-sdk-<name>`. If the variable is unset or blank, the sessions stay in the respective ServerFixes and FunRounds `.work/` directories.</sup></sub>
+
 - [依赖与构建输入 / Dependencies](docs/DEPENDENCIES.md) · [原生修复说明 / Native Faults](docs/NATIVE_FAULTS.md) · [贡献指南 / Contributing](CONTRIBUTING.md) · [安全通告 / Security](SECURITY.md) · [版本记录 / Changelog](CHANGELOG.md)
 
 ---

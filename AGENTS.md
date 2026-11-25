@@ -41,4 +41,7 @@ tests. New native boundaries pass minimal-plugin checks on Windows and Linux
 before gameplay relies on them; ABI, hook lifecycle and recovery changes require
 independent review. Filter out speculative guards without a reachable failure
 path, reuse valid evidence for unchanged inputs and keep human acceptance
-platform-specific.
+platform-specific. Audit sibling call paths before patching and remove
+superseded tests/fixtures in the same diff ("one-in, one-out"). When
+`IMOMOE_WORK_ROOT` is set, keep temporary builds, task worktrees, and probes
+under it rather than creating repo-local `.work/` or committing ad-hoc scripts.

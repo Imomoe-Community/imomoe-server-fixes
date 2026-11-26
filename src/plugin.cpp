@@ -9,6 +9,7 @@
 #include "chat_policy.hpp"
 #include "chat_listener.hpp"
 #include "compat_guards.hpp"
+#include "cvar_config_defaults.hpp"
 #include "game_ban_fix.hpp"
 #include "hostage_compat.hpp"
 #include "map_maintenance.hpp"
@@ -19,8 +20,11 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 namespace {
 
@@ -81,6 +85,7 @@ std::uint64_t g_gameBanFixConVar = 0;
 bool g_chatListenerRegistered = false;
 bool g_statusCommandRegistered = false;
 bool g_lifecycleActive = false;
+std::string g_cvarMap;
 
 bool IsTrueValue( std::string_view value ) noexcept {
 	return value == "1" || value == "true" || value == "TRUE" || value == "yes" || value == "on";
@@ -136,6 +141,69 @@ s2sdk::ResultType OnClientCommand( std::int32_t slot, s2sdk::ConCommandContext c
 	} catch ( ... ) {
 		Log( "[ServerFixes] chat guard callback failed; command allowed" );
 		return s2sdk::ResultType::Continue;
+	}
+}
+
+void ExecCvarConfig() noexcept {
+	if ( !__s2sdk_GetGameDirectory || !__s2sdk_ServerCommandEx ) {
+		Log( "[ServerFixes] ConVar CFG requires S2SDK GetGameDirectory and ServerCommandEx" );
+		return;
+	}
+	try {
+		const auto gameDirectory = s2sdk::GetGameDirectory();
+		if ( gameDirectory.empty() ) {
+			Log( "[ServerFixes] cannot resolve game directory for ConVar CFG" );
+			return;
+		}
+		const std::u8string root( gameDirectory.begin(), gameDirectory.end() );
+		const auto directory = std::filesystem::path( root ) / "csgo" / "cfg" / "imomoe";
+		const auto path = directory / "imomoe_server_fixes.cfg";
+		if ( !std::filesystem::exists( path ) ) {
+			std::filesystem::create_directories( directory );
+			std::ofstream file( path, std::ios::binary | std::ios::noreplace );
+			if ( file.is_open() ) {
+				const auto defaults = imomoe::server_fixes::kDefaultCvarConfig;
+				file.write( defaults.data(), static_cast<std::streamsize>( defaults.size() ) );
+				file.close();
+				if ( !file ) {
+					Log( "[ServerFixes] cannot write cfg/imomoe/imomoe_server_fixes.cfg" );
+					std::error_code cleanupError;
+					std::filesystem::remove( path, cleanupError );
+					if ( cleanupError ) {
+						Log( "[ServerFixes] cannot remove incomplete cfg/imomoe/imomoe_server_fixes.cfg" );
+					}
+					return;
+				}
+			}
+		}
+		if ( !std::filesystem::is_regular_file( path ) ) {
+			Log( "[ServerFixes] cannot open cfg/imomoe/imomoe_server_fixes.cfg" );
+			return;
+		}
+		(void)s2sdk::ServerCommandEx( "exec imomoe/imomoe_server_fixes.cfg" );
+		Log( "[ServerFixes] requested exec imomoe/imomoe_server_fixes.cfg" );
+	} catch ( ... ) {
+		Log( "[ServerFixes] cannot load cfg/imomoe/imomoe_server_fixes.cfg" );
+	}
+}
+
+void OnCvarMapStart() noexcept {
+	if ( !__s2sdk_GetCurrentMap ) {
+		return;
+	}
+	try {
+		const auto map = s2sdk::GetCurrentMap();
+		const std::string_view name( map.data(), map.size() );
+		if ( name.empty() || name == g_cvarMap ) {
+			return;
+		}
+		const bool changed = !g_cvarMap.empty();
+		g_cvarMap.assign( name );
+		if ( changed ) {
+			ExecCvarConfig();
+		}
+	} catch ( ... ) {
+		Log( "[ServerFixes] cannot resolve the map for ConVar CFG reload" );
 	}
 }
 
@@ -257,7 +325,7 @@ void RefreshModuleStates( bool includeDiagnostics ) noexcept {
 			maps::OnMapEnd();
 			imomoe::server_fixes::hostage::OnMapEnd();
 			guards::OnMapEnd();
-		} );
+		}, OnCvarMapStart );
 	const bool schemaQueriesReady = lifecycleReady && imomoe::server_fixes::runtime_lifecycle::SchemaQueriesReady();
 	for ( auto& module : g_nativeModules ) {
 		module.status.enabled = module.conVar && ReadEnabled( module.conVar, module.enabledByDefault );
@@ -390,6 +458,16 @@ public:
 			guards::Init();
 			native_faults::Init();
 			maps::Init();
+			// Startup covers the first map, including S2SDK's Steam same-map reload.
+			g_cvarMap.clear();
+			if ( __s2sdk_GetCurrentMap ) {
+				const auto map = s2sdk::GetCurrentMap();
+				g_cvarMap.assign( map.data(), map.size() );
+			} else {
+				Log( "[ServerFixes] ConVar CFG map reload requires S2SDK GetCurrentMap" );
+			}
+			ExecCvarConfig();
+			// The engine can queue CFG contents; updates continue to read live ConVars.
 			RefreshModuleStates();
 			return {};
 		} catch ( ... ) {

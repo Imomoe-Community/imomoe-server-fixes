@@ -14,9 +14,13 @@ bool g_registrationComplete{};
 bool g_mapStartRegistered{};
 bool g_mapEndRegistered{};
 void ( *g_onMapEnd )() noexcept{};
+void ( *g_onMapStart )() noexcept{};
 
 void MapStartCallback() noexcept {
 	if ( g_registrationComplete ) {
+		if ( g_onMapStart ) {
+			g_onMapStart();
+		}
 		g_schemaReadiness.OnMapStart();
 	}
 }
@@ -31,7 +35,7 @@ void MapEndCallback() noexcept {
 
 } // namespace
 
-bool EnsureRegistered( void ( *onMapEnd )() noexcept ) noexcept {
+bool EnsureRegistered( void ( *onMapEnd )() noexcept, void ( *onMapStart )() noexcept ) noexcept {
 	if ( g_registrationComplete ) {
 		return true;
 	}
@@ -43,6 +47,7 @@ bool EnsureRegistered( void ( *onMapEnd )() noexcept ) noexcept {
 		return false;
 	}
 	g_onMapEnd = onMapEnd;
+	g_onMapStart = onMapStart;
 	try {
 		s2sdk::OnMapEnd_Register( MapEndCallback );
 		g_mapEndRegistered = true;
@@ -67,6 +72,7 @@ std::uint64_t MapGeneration() noexcept {
 bool Shutdown() noexcept {
 	g_registrationComplete = false;
 	g_onMapEnd = nullptr;
+	g_onMapStart = nullptr;
 	g_schemaReadiness.OnMapEnd();
 	const auto unregister = []( bool& registered, auto remove, auto callback ) noexcept {
 		if ( !registered ) {

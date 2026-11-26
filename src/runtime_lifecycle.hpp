@@ -29,7 +29,8 @@ private:
 
 // Register before any module performs schema-dependent work. Map end closes
 // schema access before notifying the consumer to drop map-local callbacks.
-bool EnsureRegistered( void ( *onMapEnd )() noexcept = nullptr ) noexcept;
+bool EnsureRegistered( void ( *onMapEnd )() noexcept = nullptr,
+	void ( *onMapStart )() noexcept = nullptr ) noexcept;
 bool SchemaQueriesReady() noexcept;
 std::uint64_t MapGeneration() noexcept;
 bool Shutdown() noexcept;

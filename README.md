@@ -85,8 +85,6 @@
 
 ```text
 game/csgo/
-├── cfg/
-│   └── imomoe_server_fixes.cfg                     # 插件配置文件 / Configuration file
 └── addons/plugify/envs/imomoe_server_fixes/
     ├── bin/
     │   └── imomoe-server-fixes.dll                 # Linux: libimomoe-server-fixes.so
@@ -95,12 +93,9 @@ game/csgo/
     └── imomoe_server_fixes.pplugin                 # 插件描述清单 / Manifest
 ```
 
-在 `game/csgo/cfg/server.cfg` 中添加执行命令：
-<sub><sup>Add the execution line into `game/csgo/cfg/server.cfg`:</sup></sub>
+插件在启动和切换到另一张地图时加载 `game/csgo/cfg/imomoe/imomoe_server_fixes.cfg`；同图 `changelevel` 地图重载不重复执行（插件卸载重加载会重新执行）。文件缺失时生成默认配置，已有内容保留；不用在 `server.cfg` 再执行。<br><sub><sup>The plugin loads this file at startup and when switching to a different map. Reloading the same map does not run it again. Defaults are generated only if the file is missing; no `server.cfg` entry is needed.</sup></sub>
 
-```cfg
-exec imomoe_server_fixes.cfg
-```
+**从旧路径升级：**首次启动新版前，将要保留的设置写入新路径，保留旧 `cfg/imomoe_server_fixes.cfg` 作备份，并移除 `server.cfg`、启动参数或运维脚本里的旧 `exec` 调用。插件不读取或移动旧文件。<br><sub><sup>Before starting the upgraded plugin, transfer your settings to the new path, keep the original as a backup, and remove the old `exec` from server configuration and launch scripts. The plugin leaves the legacy file untouched.</sup></sub>
 
 ---
 
@@ -120,7 +115,7 @@ exec imomoe_server_fixes.cfg
 
 ### 配置说明 / Configuration
 
-默认值与完整选项见 [`imomoe_server_fixes.cfg`](configs/imomoe_server_fixes.cfg)。在服务端的 `game/csgo/cfg/imomoe_server_fixes.cfg` 中按需开启模块，再用 `sf_status` 确认可用状态。<br><sub><sup>See the [shipped configuration](configs/imomoe_server_fixes.cfg) for defaults. Enable only the modules you need and check availability with `sf_status`.</sup></sub>
+默认值与完整选项见 [配置模板](configs/imomoe_server_fixes.cfg)。在 `game/csgo/cfg/imomoe/imomoe_server_fixes.cfg` 中按需调整；换图后用 `sf_status` 查看结果，也可在服务端控制台手动执行 `exec imomoe/imomoe_server_fixes.cfg`。<br><sub><sup>Edit the generated file and check `sf_status` after the next map load. You can also run the `exec` command above from the server console.</sup></sub>
 
 | 用途 / <sub><sup>Use case</sup></sub> | 设置 / <sub><sup>Setting</sup></sub> |
 | :--- | :--- |
@@ -141,8 +136,10 @@ exec imomoe_server_fixes.cfg
 <sub><sup>Migrate legacy FunRounds TOML settings to `.cfg`:</sup></sub>
 
 ```powershell
-python tools/migrate_config.py <path-to-funrounds.toml> --output configs/imomoe_server_fixes.cfg [--overwrite]
+python tools/migrate_config.py <path-to-funrounds.toml> --output hostage-setting.cfg
 ```
+
+将生成的设置写入新路径的配置文件，保留其中其他内容。<br><sub><sup>Transfer the generated setting to the new CFG without replacing its other contents.</sup></sub>
 
 </details>
 

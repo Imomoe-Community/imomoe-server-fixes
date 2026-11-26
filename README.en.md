@@ -80,8 +80,6 @@ Deploy plugin artifacts to the dedicated server root directory:
 
 ```text
 game/csgo/
-├── cfg/
-│   └── imomoe_server_fixes.cfg                     # Configuration file
 └── addons/plugify/envs/imomoe_server_fixes/
     ├── bin/
     │   └── imomoe-server-fixes.dll                 # Linux: libimomoe-server-fixes.so
@@ -90,11 +88,9 @@ game/csgo/
     └── imomoe_server_fixes.pplugin                 # Manifest
 ```
 
-Add the execution line into `game/csgo/cfg/server.cfg`:
+The plugin loads `game/csgo/cfg/imomoe/imomoe_server_fixes.cfg` at startup and when switching to a different map. Reloading the same map via `changelevel` does not run it again (unloading and reloading the plugin runs startup again). Defaults are generated only if the file is missing; no `server.cfg` entry is needed.
 
-```cfg
-exec imomoe_server_fixes.cfg
-```
+**Upgrading from the old path:** Before starting the upgraded plugin, transfer the settings you want to keep to the new file, retain the old `cfg/imomoe_server_fixes.cfg` as a backup, and remove the old `exec` from `server.cfg`, launch arguments, or deployment scripts. The plugin does not read or move the old file.
 
 ---
 
@@ -114,7 +110,7 @@ In `sf_status`, `hostage_compat` `CT` reports rescue-zone observer readiness and
 
 ### Configuration
 
-See [`imomoe_server_fixes.cfg`](configs/imomoe_server_fixes.cfg) for defaults and all options. Enable only the modules you need in `game/csgo/cfg/imomoe_server_fixes.cfg` and check availability with `sf_status`.
+See the [configuration template](configs/imomoe_server_fixes.cfg) for defaults and options. Edit `game/csgo/cfg/imomoe/imomoe_server_fixes.cfg` and check `sf_status` after the next map load. To apply changes now, run `exec imomoe/imomoe_server_fixes.cfg` from the server console.
 
 | Use case | Setting |
 | :--- | :--- |
@@ -134,8 +130,10 @@ A limit of `0` disables that rate guard. Excess messages are dropped without dis
 Migrate legacy FunRounds TOML settings (`hostage_rescue_compat`) to `.cfg`:
 
 ```powershell
-python tools/migrate_config.py <path-to-funrounds.toml> --output configs/imomoe_server_fixes.cfg [--overwrite]
+python tools/migrate_config.py <path-to-funrounds.toml> --output hostage-setting.cfg
 ```
+
+Transfer the generated setting to the new CFG without replacing its other contents.
 
 </details>
 

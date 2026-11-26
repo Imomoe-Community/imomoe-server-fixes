@@ -59,19 +59,21 @@ def main() -> None:
     parser.add_argument("--generator", type=Path,
                         help="plugify-gen v1.2.15 for --funrounds-source; otherwise search IMOMOE_WORK_ROOT/tools, "
                              "then ServerFixes and FunRounds .work/tools")
-    parser.add_argument("--work-name", help="unique session name in IMOMOE_WORK_ROOT/sessions or checkout-local "
+    work_location = parser.add_mutually_exclusive_group()
+    work_location.add_argument("--work-name", help="unique session name in IMOMOE_WORK_ROOT/sessions or checkout-local "
                                             ".work; defaults to the current timestamp")
+    work_location.add_argument("--work-dir", type=Path, help="new directory for build outputs and the resulting ZIP")
     parser.add_argument("--resume-source", type=Path, help="reuse a clean pinned SDK source checkout for the selected host")
     parser.add_argument("--cs2-bin", type=Path, help="CS2 game/bin/win64 or game/bin/linuxsteamrt64 for callback tests; defaults to CS2_GAME_BIN")
     args = parser.parse_args()
     main_source = args.funrounds_source.resolve() if args.funrounds_source else None
-    work_name = args.work_name or datetime.now().strftime("%Y%m%d-%H%M%S")
+    work_name = args.work_dir.name if args.work_dir else args.work_name or datetime.now().strftime("%Y%m%d-%H%M%S")
     if not work_name or Path(work_name).name != work_name or work_name in {".", ".."}:
         parser.error("--work-name must be one directory name, not a path")
     raw_work_root = os.environ.get("IMOMOE_WORK_ROOT", "").strip()
     work_root = Path(raw_work_root).expanduser().resolve() if raw_work_root else None
     sessions = work_root / "sessions" if work_root else None
-    work = (sessions if sessions else ROOT / ".work") / f"serverfixes-{work_name}"
+    work = args.work_dir.resolve() if args.work_dir else (sessions if sessions else ROOT / ".work") / f"serverfixes-{work_name}"
     if work.exists():
         parser.error(f"Work directory already exists; choose another --work-name: {work}")
     sdk_args = None
@@ -91,7 +93,8 @@ def main() -> None:
         if generator is None or not generator.is_file():
             parser.error("Install plugify-gen 1.2.15 in plugify-gen-v1.2.15 under IMOMOE_WORK_ROOT/tools "
                          "or a checkout's .work/tools, or pass --generator PATH")
-        sdk_work = (sessions if sessions else main_source / ".work") / f"serverfixes-sdk-{work_name}"
+        sdk_work = work / "sdk" if args.work_dir else (
+            (sessions if sessions else main_source / ".work") / f"serverfixes-sdk-{work_name}")
         if sdk_work.exists():
             parser.error(f"SDK work directory already exists; choose another --work-name: {sdk_work}")
         sdk = load_sdk(main_source)
@@ -171,7 +174,7 @@ def main() -> None:
             mounts.append((main_source, "/workspace", ""))
         else:
             mounts += [(path, str(path), ":ro") for path in (source, build)]
-        if sessions:
+        if sessions or args.work_dir:
             # Keep external SDK paths identical to those in the SDK builder's CMake cache.
             mounts.append((work, str(work), ""))
             if main_source:
@@ -239,9 +242,7 @@ def main() -> None:
         shutil.copy2(path, destination)
     (plugin / "gamedata").mkdir()
     shutil.copy2(ROOT / "gamedata/imomoe_server_fixes.jsonc", plugin / "gamedata/imomoe_server_fixes.jsonc")
-    (package / "game/csgo/cfg").mkdir(parents=True)
-    shutil.copy2(ROOT / "configs/imomoe_server_fixes.cfg", package / "game/csgo/cfg/imomoe_server_fixes.cfg")
-    archive = ROOT / "dist" / f"imomoe-server-fixes-{target}-{work_name}.zip"
+    archive = (work if args.work_dir else ROOT / "dist") / f"imomoe-server-fixes-{target}-{work_name}.zip"
     archive.parent.mkdir(exist_ok=True)
     if archive.exists():
         raise FileExistsError(archive)
@@ -252,7 +253,6 @@ def main() -> None:
     required = {f"game/csgo/addons/plugify/envs/imomoe_server_fixes/bin/{binary.name}",
                 "game/csgo/addons/plugify/envs/imomoe_server_fixes/imomoe_server_fixes.pplugin",
                 "game/csgo/addons/plugify/envs/imomoe_server_fixes/gamedata/imomoe_server_fixes.jsonc",
-                "game/csgo/cfg/imomoe_server_fixes.cfg",
                 "game/csgo/addons/plugify/envs/imomoe_server_fixes/LICENSE"}
     with zipfile.ZipFile(archive) as zf:
         missing = required - set(zf.namelist())

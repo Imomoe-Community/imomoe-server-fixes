@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+import zipfile
 
 SCRIPT = Path(__file__).resolve().parents[1] / "build_paired.py"
 SPEC = importlib.util.spec_from_file_location("serverfixes_build_paired", SCRIPT)
@@ -32,35 +33,49 @@ class PairedBuildSourceTests(unittest.TestCase):
         sdk_work = Path("/tmp/sdk-run")
         self.assertEqual(MODULE.choose_sdk_source(sdk_work, None), sdk_work / "source")
 
-    def test_windows_packaging_configures_the_supplied_sdk_without_funrounds(self):
+    def test_windows_packaging_uses_supplied_sdk_and_explicit_output_directory(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
             source, build, game_bin = (root / name for name in ("source", "build", "game-bin"))
             for directory in (source, build, game_bin):
                 directory.mkdir()
             (source / "plugify-plugin-s2sdk.pplugin.in").touch()
+            (source / "LICENSE").touch()
             (build / "CMakeCache.txt").write_text("CMAKE_GENERATOR:INTERNAL=Visual Studio 18 2026\n", encoding="utf-8")
             (game_bin / "tier0.dll").touch()
+            repo = root / "repo"
+            (repo / "gamedata").mkdir(parents=True)
+            for path in ("LICENSE", "imomoe_server_fixes.pplugin", "gamedata/imomoe_server_fixes.jsonc"):
+                (repo / path).touch()
+            work = root / "explicit" / "smoke"
 
             def run(command):
-                if command[0] == "cmake":
+                if command[:2] == ["cmake", "-S"]:
                     self.assertEqual(command[5:9], ["-G", "Visual Studio 18 2026", "-A", "x64"])
                     self.assertIn(f"-DSERVER_FIXES_SOURCE_SDK_PUBLIC_INCLUDE_DIR={source / 'external/sourcesdk/public'}", command)
                     self.assertIn(f"-DSERVER_FIXES_SOURCE_SDK_BUILD_DIR={build}", command)
-                    self.assertIn("-DSERVER_FIXES_CALLBACK_TESTS=ON", command)
-                    raise ReachedConfigure
-                self.assertEqual(command[1:3], ["-m", "unittest"])
+                    expected = "policy" if "-DSERVER_FIXES_CALLBACK_TESTS=ON" in command else "production"
+                    self.assertEqual(command[3:5], ["-B", work / expected])
+                elif command[:3] == ["cmake", "--build", work / "production"]:
+                    binary = work / "production/bin/imomoe-server-fixes.dll"
+                    binary.parent.mkdir(parents=True)
+                    binary.write_bytes(b"test DLL")
 
             argv = [str(SCRIPT), "--sdk-source", str(source), "--sdk-build", str(build),
-                    "--cs2-bin", str(game_bin)]
+                    "--cs2-bin", str(game_bin), "--work-dir", str(work)]
             with (patch.dict(os.environ, clear=True),
                   patch.object(MODULE.sys, "argv", argv),
                   patch.object(MODULE.sys, "platform", "win32"),
-                  patch.object(MODULE, "ROOT", root),
+                  patch.object(MODULE, "ROOT", repo),
                   patch.object(MODULE, "LOG_DIR", None),
-                  patch.object(MODULE, "run", run),
-                  self.assertRaises(ReachedConfigure)):
+                  patch.object(MODULE, "run", run)):
                 MODULE.main()
+
+            with zipfile.ZipFile(work / "imomoe-server-fixes-windows-x64-smoke.zip") as archive:
+                self.assertEqual(archive.read(
+                    "game/csgo/addons/plugify/envs/imomoe_server_fixes/bin/imomoe-server-fixes.dll"
+                ), b"test DLL")
+            self.assertFalse((repo / "dist").exists())
 
     def test_paired_session_paths_and_generator_precedence(self):
         cases = (
@@ -70,6 +85,7 @@ class PairedBuildSourceTests(unittest.TestCase):
             ("shared", ("repo", "main"), "repo"),
             ("shared", ("main",), "main"),
             ("explicit", ("shared", "explicit"), "explicit"),
+            ("work-dir", ("shared",), "shared"),
         )
         for layout, available, selected in cases:
             with self.subTest(layout=layout, available=available), tempfile.TemporaryDirectory() as temp:
@@ -99,6 +115,10 @@ class PairedBuildSourceTests(unittest.TestCase):
                         "--work-name", "test"]
                 if layout == "explicit":
                     argv += ["--generator", str(generators["explicit"])]
+                if layout == "work-dir":
+                    work = root / "custom-output"
+                    sdk_work = work / "sdk"
+                    argv[-2:] = ["--work-dir", str(work)]
                 sdk = Mock()
                 sdk.host_name.return_value = "windows-x64"
                 sdk.windows_cmake_generator.return_value = "Visual Studio 18 2026"
@@ -124,7 +144,7 @@ class PairedBuildSourceTests(unittest.TestCase):
                                              "--generator", generators[selected], "--work-dir", sdk_work])
                 self.assertEqual(calls[-1][3:5], ["-B", work / "policy"])
                 self.assertIn(f"-DSERVER_FIXES_SOURCE_SDK_BUILD_DIR={sdk_work / 'build'}", calls[-1])
-                if layout in ("shared", "explicit"):
+                if layout in ("shared", "explicit", "work-dir"):
                     self.assertFalse((repo / ".work/serverfixes-test").exists())
                     self.assertFalse((main / ".work/serverfixes-sdk-test").exists())
 

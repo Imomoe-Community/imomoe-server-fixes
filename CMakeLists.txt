@@ -218,12 +218,16 @@ target_compile_definitions(imomoe-server-fixes PRIVATE
 )
 include(GenerateExportHeader)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/exports")
+set(server_fixes_cfg "${CMAKE_CURRENT_SOURCE_DIR}/configs/imomoe_server_fixes.cfg")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${server_fixes_cfg}")
+file(READ "${server_fixes_cfg}" SERVER_FIXES_DEFAULT_CFG)
+configure_file(src/cvar_config_defaults.hpp.in exports/cvar_config_defaults.hpp @ONLY)
 generate_export_header(imomoe-server-fixes
 	EXPORT_MACRO_NAME PLUGIN_API
 	EXPORT_FILE_NAME "${CMAKE_CURRENT_BINARY_DIR}/exports/plugin_export.h"
 )
 if(MSVC)
-	target_compile_options(imomoe-server-fixes PRIVATE /W4 /WX /EHsc /Zc:preprocessor)
+	target_compile_options(imomoe-server-fixes PRIVATE /W4 /WX /EHsc /Zc:preprocessor /utf-8)
 else()
 	target_compile_options(imomoe-server-fixes PRIVATE -Wall -Wextra -Wconversion -Wshadow -Werror)
 endif()

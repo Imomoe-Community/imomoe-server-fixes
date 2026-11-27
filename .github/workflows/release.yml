@@ -1,0 +1,390 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to draft (e.g. v0.1.0 or v0.1.0-rc.1)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      base_version: ${{ steps.meta.outputs.base_version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - id: meta
+        name: Validate release tag and manifest version
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"].strip()
+          match = re.fullmatch(r"v([0-9]+\.[0-9]+\.[0-9]+)(?:-([0-9A-Za-z.-]+))?", tag)
+          if not match:
+              raise SystemExit(
+                  f"Invalid release tag {tag!r}: expected vX.Y.Z or vX.Y.Z-<prerelease>"
+              )
+
+          base_version = match.group(1)
+          prerelease = "true" if match.group(2) else "false"
+          manifest = json.loads(Path("imomoe_server_fixes.pplugin").read_text(encoding="utf-8"))
+          manifest_version = manifest.get("version")
+          if manifest_version != base_version:
+              raise SystemExit(
+                  f"Tag base version {base_version!r} does not match "
+                  f"imomoe_server_fixes.pplugin version {manifest_version!r}"
+              )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8", newline="\n") as out:
+              out.write(f"tag={tag}\n")
+              out.write(f"base_version={base_version}\n")
+              out.write(f"prerelease={prerelease}\n")
+          print(f"Prepared tag={tag} base_version={base_version} prerelease={prerelease}")
+          PY
+
+  build:
+    needs: prepare
+    name: Build and package (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            runner: windows-latest
+          - platform: linux-x64
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure, build and run SDK-independent policy tests
+        run: |
+          cmake --preset policy
+          cmake --build --preset policy --parallel 2
+          ctest --preset policy --output-on-failure
+
+      - name: Run Python configuration migration and tooling tests
+        run: |
+          python -m unittest discover -s tests -p "test_*.py"
+          python -m unittest discover -s tools/tests -p "test_*.py"
+
+      - name: Checkout pinned official S2SDK v3.5.1
+        shell: pwsh
+        run: |
+          $s2sdkRepo = 'https://github.com/untrustedmodders/plugify-plugin-s2sdk.git'
+          $s2sdkCommit = '732eebe7c0d195dd7411ee29bd33a1b70c7bc2f4'
+          $gitArgs = if ($IsWindows) { @('-c', 'core.longpaths=true') } else { @() }
+          git @gitArgs init .work/s2sdk-src
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git @gitArgs -C .work/s2sdk-src remote add origin $s2sdkRepo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git @gitArgs -C .work/s2sdk-src fetch --depth=1 origin $s2sdkCommit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git @gitArgs -C .work/s2sdk-src checkout --detach $s2sdkCommit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git @gitArgs -C .work/s2sdk-src submodule update --init --recursive --depth 1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build paired SourceSDK and imomoe-server-fixes (Windows)
+        if: matrix.platform == 'windows-x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vsVer = (& $vswhere -latest -property installationVersion).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $vsVer) { throw 'Cannot locate Visual Studio installation via vswhere' }
+          $major = $vsVer.Split('.')[0]
+          $caps = cmake -E capabilities | ConvertFrom-Json
+          $matches = @($caps.generators | Where-Object { $_.name -like "Visual Studio $major *" } | ForEach-Object { $_.name })
+          if ($matches.Count -ne 1) { throw "Expected unique Visual Studio $major generator, got: $($matches -join ', ')" }
+          $vsGen = $matches[0]
+
+          $s2sdkSrc = (Resolve-Path '.work/s2sdk-src').Path
+          $s2sdkBuild = Join-Path $PWD '.work/s2sdk-build'
+          $prodBuild = Join-Path $PWD '.work/production'
+
+          cmake -S $s2sdkSrc -B $s2sdkBuild -G $vsGen -A x64 `
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded `
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>' `
+            -DSOURCESDK_GAME_TARGET=cs2 -DSOURCESDK_ENABLE_TESTS=OFF -Dprotobuf_WITH_ZLIB=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          cmake --build $s2sdkBuild --target sourcesdk --config Release --parallel 1 -- /nr:false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          cmake -S . -B $prodBuild -G $vsGen -A x64 `
+            "-DSERVER_FIXES_PLUGIFY_INCLUDE_DIR=$s2sdkSrc/external/plugify/include" `
+            "-DSERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR=$PWD/generated-s2sdk/external/plugify/include" `
+            "-DSERVER_FIXES_SOURCE_SDK_PUBLIC_INCLUDE_DIR=$s2sdkSrc/external/sourcesdk/public" `
+            "-DSERVER_FIXES_SOURCE_SDK_BUILD_DIR=$s2sdkBuild" `
+            "-DSERVER_FIXES_SOURCE_SDK_LIBRARY_DIR=$s2sdkSrc/external/sourcesdk/lib/win64" `
+            "-DSERVER_FIXES_SOURCE_SDK_PROTO_INCLUDE_DIR=$s2sdkBuild/external/sourcesdk/protos"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          cmake --build $prodBuild --target imomoe-server-fixes --config Release --parallel 1 -- /nr:false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build paired SourceSDK and imomoe-server-fixes in SteamRT GCC 14 (Linux)
+        if: matrix.platform == 'linux-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_image='registry.gitlab.steamos.cloud/steamrt/sniper/sdk@sha256:bb30053d3cd19d35c76ae69b2790dbaa1430448006f8240cb6d7e723f2d1940e'
+          build_image='serverfixes-steamrt-gcc14:sniper-gcc14.2.0'
+          cat > .work/steamrt-gcc14.Dockerfile <<EOF
+          FROM ${base_image}
+          RUN apt-get update \\
+              && apt-get install --yes --no-install-recommends \\
+                  gcc-14-monolithic=1:14.2.0-19~steamrt3.1+bsrt3.1 \\
+              && ln -sfn /usr/bin/gcc-14 /usr/bin/gcc \\
+              && ln -sfn /usr/bin/g++-14 /usr/bin/g++ \\
+              && test "\$(gcc-14 -dumpfullversion)" = 14.2.0 \\
+              && test "\$(g++-14 -dumpfullversion)" = 14.2.0 \\
+              && rm -rf /var/lib/apt/lists/*
+          ENV CC=/usr/bin/gcc-14
+          ENV CXX=/usr/bin/g++-14
+          EOF
+          docker build -f .work/steamrt-gcc14.Dockerfile -t "$build_image" .work
+
+          jobs="$(nproc)"
+          if (( jobs > 4 )); then jobs=4; fi
+
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp -v "${PWD}:/workspace" -w /workspace "$build_image" \
+            bash -lc "set -euo pipefail
+              cmake -S /workspace/.work/s2sdk-src -B /workspace/.work/s2sdk-build \
+                -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=/usr/bin/gcc-14 -DCMAKE_CXX_COMPILER=/usr/bin/g++-14 \
+                -DSOURCESDK_GAME_TARGET=cs2 -DSOURCESDK_ENABLE_TESTS=OFF -Dprotobuf_WITH_ZLIB=OFF
+              cmake --build /workspace/.work/s2sdk-build --target sourcesdk --config Release --parallel ${jobs}
+              cmake -S /workspace -B /workspace/.work/production \
+                -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=/usr/bin/gcc-14 -DCMAKE_CXX_COMPILER=/usr/bin/g++-14 \
+                -DSERVER_FIXES_PLUGIFY_INCLUDE_DIR=/workspace/.work/s2sdk-src/external/plugify/include \
+                -DSERVER_FIXES_S2SDK_GENERATED_INCLUDE_DIR=/workspace/generated-s2sdk/external/plugify/include \
+                -DSERVER_FIXES_SOURCE_SDK_PUBLIC_INCLUDE_DIR=/workspace/.work/s2sdk-src/external/sourcesdk/public \
+                -DSERVER_FIXES_SOURCE_SDK_BUILD_DIR=/workspace/.work/s2sdk-build \
+                -DSERVER_FIXES_SOURCE_SDK_LIBRARY_DIR=/workspace/.work/s2sdk-src/external/sourcesdk/lib/linuxsteamrt64 \
+                -DSERVER_FIXES_SOURCE_SDK_PROTO_INCLUDE_DIR=/workspace/.work/s2sdk-build/external/sourcesdk/protos
+              cmake --build /workspace/.work/production --target imomoe-server-fixes --config Release --parallel ${jobs}
+            "
+
+          ldd_out="$(docker run --rm --network none -v "${PWD}:/workspace:ro" -w /workspace "$build_image" \
+            bash -lc "LC_ALL=C LD_LIBRARY_PATH=/workspace/.work/s2sdk-src/external/sourcesdk/lib/linuxsteamrt64 ldd -v /workspace/.work/production/bin/libimomoe-server-fixes.so")"
+          printf '%s\n' "$ldd_out"
+          while IFS= read -r line; do
+            [[ "$line" == *"not found"* ]] || continue
+            trimmed="${line#"${line%%[![:space:]]*}"}"
+            soname="${trimmed%%[[:space:]]*}"
+            if [[ "$line" == *"=> not found" ]] && [[ "$soname" == "libtier0.so" ]]; then
+              continue
+            fi
+            echo "Unresolved Linux runtime dependency: $line" >&2
+            exit 1
+          done <<< "$ldd_out"
+
+      - name: Package archive
+        shell: pwsh
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          BASE_VERSION: ${{ needs.prepare.outputs.base_version }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          platform = os.environ["PLATFORM"]
+          base_version = os.environ["BASE_VERSION"]
+          windows = platform == "windows-x64"
+          magic = b"MZ" if windows else b"\x7fELF"
+          bin_name = "imomoe-server-fixes.dll" if windows else "libimomoe-server-fixes.so"
+          binary = Path(".work/production/bin") / bin_name
+          if not binary.is_file():
+              raise FileNotFoundError(binary)
+          with binary.open("rb") as fh:
+              if fh.read(len(magic)) != magic:
+                  raise ValueError(f"Binary does not match {platform}: {binary}")
+
+          plugin = "game/csgo/addons/plugify/envs/imomoe_server_fixes"
+          files = {
+              f"{plugin}/bin/{bin_name}": binary,
+              f"{plugin}/imomoe_server_fixes.pplugin": Path("imomoe_server_fixes.pplugin"),
+              f"{plugin}/gamedata/imomoe_server_fixes.jsonc": Path("gamedata/imomoe_server_fixes.jsonc"),
+              f"{plugin}/LICENSE": Path("LICENSE"),
+          }
+          s2sdk_src = Path(".work/s2sdk-src")
+          license_names = {"LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING", "COPYING.txt"}
+          license_files = [
+              p for p in s2sdk_src.rglob("*")
+              if p.is_file() and p.name in license_names and ".git" not in p.parts and "build" not in p.parts
+          ]
+          if not license_files:
+              raise FileNotFoundError(f"Pinned SDK source contains no license files: {s2sdk_src}")
+          for p in license_files:
+              rel = p.relative_to(s2sdk_src).as_posix()
+              files[f"{plugin}/THIRD_PARTY/{rel}"] = p
+
+          archive = Path(f"dist/imomoe-server-fixes-{base_version}-{platform}.zip")
+          archive.parent.mkdir(parents=True, exist_ok=True)
+          with ZipFile(archive, "w", compression=ZIP_DEFLATED) as zf:
+              for arcname in sorted(files):
+                  zf.write(files[arcname], arcname)
+          with ZipFile(archive) as zf:
+              if set(zf.namelist()) != files.keys() or zf.testzip() is not None:
+                  raise ValueError(f"Archive validation failed: {archive}")
+          print(f"Verified package: {archive}")
+          PY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: release-imomoe-server-fixes-${{ matrix.platform }}
+          path: dist/imomoe-server-fixes-*-${{ matrix.platform }}.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Verify archives and generate SHA256SUMS.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          zips=(release-assets/*.zip)
+          if (( ${#zips[@]} < 2 )); then
+            echo "Expected at least 2 release ZIPs, got ${#zips[@]}" >&2
+            ls -la release-assets >&2
+            exit 1
+          fi
+          (cd release-assets && LC_ALL=C sha256sum *.zip > SHA256SUMS.txt)
+          cat release-assets/SHA256SUMS.txt
+      - id: notes
+        name: Extract release notes from CHANGELOG.md
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          BASE_VERSION: ${{ needs.prepare.outputs.base_version }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          base_version = os.environ["BASE_VERSION"]
+          is_pre = os.environ["IS_PRERELEASE"] == "true"
+          short_sha = os.environ["SHORT_SHA"][:7]
+
+          section_lines = None
+          changelog = Path("CHANGELOG.md")
+          if changelog.is_file():
+              heading_re = re.compile(rf"^##\s+\[{re.escape(base_version)}\](?:\s|$).*")
+              next_re = re.compile(r"^##\s+\[")
+              lines = changelog.read_text(encoding="utf-8").splitlines()
+              collecting = False
+              collected = []
+              for line in lines:
+                  if not collecting:
+                      if heading_re.match(line):
+                          collecting = True
+                  else:
+                      if next_re.match(line):
+                          break
+                      collected.append(line)
+              if collecting:
+                  while collected and (not collected[0].strip()):
+                      collected.pop(0)
+                  while collected and (not collected[-1].strip() or collected[-1].strip() == "---"):
+                      collected.pop()
+                  if collected:
+                      section_lines = collected
+
+          has_notes = section_lines is not None
+          if has_notes:
+              body = "\n".join(section_lines) + "\n"
+              if is_pre:
+                  banner = f"> **Pre-release / 预发布版本** — Automatically built from `{tag}` (`{short_sha}`).\n\n"
+                  body = banner + body
+              Path("release-notes.md").write_text(body, encoding="utf-8")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8", newline="\n") as out:
+              out.write(f"has_notes={'true' if has_notes else 'false'}\n")
+          print(f"Extracted CHANGELOG section for {base_version}: {has_notes}")
+          PY
+      - name: Create or replace Draft GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          HAS_NOTES: ${{ steps.notes.outputs.has_notes }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ["TAG"]
+          raw = subprocess.check_output(
+              ["gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"],
+              text=True,
+          )
+          pages = json.loads(raw) if raw.strip() else []
+          releases = [item for page in pages for item in page] if pages and isinstance(pages[0], list) else pages
+          for rel in releases:
+              if rel.get("tag_name") == tag:
+                  if not rel.get("draft"):
+                      raise SystemExit(
+                          f"Published release already exists for {tag} (id={rel.get('id')}); refusing to overwrite"
+                      )
+                  subprocess.run(
+                      ["gh", "api", "-X", "DELETE", f"repos/{repo}/releases/{rel['id']}"],
+                      check=True,
+                  )
+                  print(f"Deleted existing draft release id={rel['id']} for {tag}")
+          PY
+
+          args=("$TAG" release-assets/* --draft --target "$GITHUB_SHA" --title "$TAG")
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          if [[ "$HAS_NOTES" == "true" ]]; then
+            args+=(--notes-file release-notes.md)
+          else
+            args+=(--generate-notes)
+          fi
+          gh release create "${args[@]}"

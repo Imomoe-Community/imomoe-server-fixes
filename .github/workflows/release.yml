@@ -207,12 +207,11 @@ jobs:
           done <<< "$ldd_out"
 
       - name: Package archive
-        shell: pwsh
+        shell: python
         env:
           PLATFORM: ${{ matrix.platform }}
           BASE_VERSION: ${{ needs.prepare.outputs.base_version }}
         run: |
-          python - <<'PY'
           import os
           from pathlib import Path
           from zipfile import ZIP_DEFLATED, ZipFile
@@ -257,8 +256,6 @@ jobs:
               if set(zf.namelist()) != files.keys() or zf.testzip() is not None:
                   raise ValueError(f"Archive validation failed: {archive}")
           print(f"Verified package: {archive}")
-          PY
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v7.0.2
         with:

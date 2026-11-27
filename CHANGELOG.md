@@ -5,21 +5,23 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## [Unreleased] / 未发布
+## [0.2.0] - 2026-11-27
 
 ### 简体中文
 
-- **配对依赖**：使用官方 S2SDK 3.5.1 构建，最低运行版本为 3.4.3；PolyHook 最低运行版本提高到 2.5.9，Windows 和 Linux 均使用官方 2.5.9 验证。
-- **按需兼容与防护**：新增语音检查和限流、Workshop 地图语音分流、换队限流和观察者残留活体修复；关闭 `sv_cheats` 时清除 noclip 状态，重生后不再继承飞行，若加载可选 `imomoe_admin`（≥ 0.1.0）则仅保留其认领的当前 pawn 飞行。
-- **按需原生修复与运维**：新增 Hammer ID 保留、CSTV 配额筛选、水中跳跃、单 tick 起跳上限、斜坡接缝、KeyValues 限流、赛末换图恢复和长图时钟刷新；通过 `sf_status` 查看可用性。
-- **Gamedata 维护**：按模块验证所需原生入口和指令，不再按整份引擎映像的构建身份停用修复。
+- **配对依赖**：使用官方 S2SDK 3.5.1 构建，移除自定义 S2SDK 导出依赖，最低运行版本为 3.4.3；PolyHook 最低运行版本提高到 2.5.9，Windows 和 Linux 均使用官方 2.5.9 验证。
+- **按需兼容与防护**：新增语音检查和限流、Workshop 地图语音分流、换队限流、观察者残留活体修复，以及可选游戏封禁残留修复（`sf_game_ban_fix`）；关闭 `sv_cheats` 时清除 noclip 状态，重生后不再继承飞行，若加载可选 `imomoe_admin`（≥ 0.1.0）则仅保留其认领的当前 pawn 飞行。
+- **按需原生修复与运维**：新增光束坐标、过滤器空触发者与装备预缓存默认修复，以及 Hammer ID 保留、CSTV 配额筛选、水中跳跃、单 tick 起跳上限、斜坡接缝、敌人移动碰撞跟随队友规则、KeyValues 限流、赛末换图恢复和长图时钟刷新；`spawn_capacity` 扩展至所有地图自动扩容；通过 `sf_status` 查看可用性。
+- **配置与构建运维**：启动和切换不同地图时自动生成（缺失时）并加载 `game/csgo/cfg/imomoe/imomoe_server_fixes.cfg`，无需在 `server.cfg` 手动 `exec`；配对构建工具支持 `IMOMOE_WORK_ROOT` 与显式 `--work-dir`。
+- **Gamedata 维护**：更新至 CS2 `26879581` 特征码，按模块验证所需原生入口和指令，不再按整份引擎映像的构建身份停用修复。
 
 ### English
 
-- **Paired dependencies**: Build with official S2SDK 3.5.1 and require at least 3.4.3 at runtime. Raise the minimum PolyHook runtime to 2.5.9; validate Windows and Linux against the official 2.5.9 release.
-- **Opt-in compatibility guards**: Add voice validation and rate limiting, Workshop map speaker separation, team-switch limits, and stale spectator pawn reconciliation. Disabling `sv_cheats` clears noclip so it does not carry over to a respawn, while preserving noclip for the exact current pawn claimed by optional `imomoe_admin` (>= 0.1.0).
-- **Opt-in native fixes and maintenance**: Add Hammer ID retention, CSTV bot quota exclusion, water jumping, one jump per tick, ramp seam handling, KeyValues rate limiting, match-end map recovery, and long-running map refresh. Check availability with `sf_status`.
-- **Gamedata maintenance**: Verify native entry points and instructions per module rather than requiring a whole engine image to match a fixed build identity.
+- **Paired dependencies**: Build with official S2SDK 3.5.1, remove custom S2SDK export dependencies, and require at least 3.4.3 at runtime. Raise the minimum PolyHook runtime to 2.5.9; validate Windows and Linux against the official 2.5.9 release.
+- **Opt-in compatibility guards**: Add voice validation and rate limiting, Workshop map speaker separation, team-switch limits, stale spectator pawn reconciliation, and optional stale GC ban cleanup (`sf_game_ban_fix`). Disabling `sv_cheats` clears noclip so it does not carry over to a respawn, while preserving noclip for the exact current pawn claimed by optional `imomoe_admin` (>= 0.1.0).
+- **Opt-in native fixes and maintenance**: Add default beam, filter activator, and equipment precache fixes plus opt-in Hammer ID retention, CSTV bot quota exclusion, water jumping, one jump per tick, ramp seam handling, enemy movement collision following teammate rules, KeyValues rate limiting, match-end map recovery, and long-running map refresh; expand `spawn_capacity` to all maps. Check availability with `sf_status`.
+- **Configuration and build tooling**: Auto-generate (when missing) and load `game/csgo/cfg/imomoe/imomoe_server_fixes.cfg` on startup and map changes without requiring a manual `server.cfg` `exec`; add `IMOMOE_WORK_ROOT` and explicit `--work-dir` support to paired build tooling.
+- **Gamedata maintenance**: Update signatures for CS2 build `26879581` and verify native entry points and instructions per module rather than requiring a whole engine image to match a fixed build identity.
 
 ---
 
